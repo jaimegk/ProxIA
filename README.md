@@ -162,6 +162,12 @@ The two commands complement each other: `improve` tightens the regex floor fast;
 
 ---
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zeroc00I/DontFeedTheAI&type=Date)](https://star-history.com/#zeroc00I/DontFeedTheAI&Date)
+
+---
+
 ## License
 
 [MIT](LICENSE)
