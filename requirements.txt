@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx
+faker
+pytest
+pytest-asyncio
+pytest-mock
+wordfreq
+paramiko
+psutil

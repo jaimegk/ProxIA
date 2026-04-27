@@ -1,0 +1,111 @@
+# docker-compose.vps.yml — Deploy pentest-proxy + Ollama on a remote VPS
+#
+# Architecture:
+#   MacBook (Claude Code) ──SSH tunnel──▶ VPS:8080 (proxy) ──▶ api.anthropic.com
+#                                                ↕
+#                                        VPS:11434 (Ollama)
+#
+# Quick start on VPS:
+#   git clone ... && cd pentest-proxy
+#   cp .env.example .env && nano .env   # set ENGAGEMENT_ID
+#   docker compose -f docker-compose.vps.yml up -d
+#
+# From MacBook:
+#   ssh -N -L 8080:localhost:8080 user@your-vps &
+#   export ANTHROPIC_BASE_URL=http://localhost:8080
+#   export ENGAGEMENT_ID=client-2026
+#   claude
+
+services:
+
+  proxy:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-5555}:5555"   # bind to loopback only — expose via SSH tunnel
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:1.7b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-90}
+      OLLAMA_NUM_THREADS: ${OLLAMA_NUM_THREADS:-6}   # VPS has no thermal constraints
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_CHUNK_SIZE: ${LLM_CHUNK_SIZE:-800}
+      LLM_CHUNK_OVERLAP: ${LLM_CHUNK_OVERLAP:-100}
+      ENGAGEMENT_ID: ${ENGAGEMENT_ID:-default}
+      PORT: "5555"
+      PROXY_SECRET: ${PROXY_SECRET:-}
+    volumes:
+      - pii_vault:/app/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"  # VPS localhost only — exposed via SSH tunnel for feedback loop
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # One-shot service that pulls the model on first run
+  model-puller:
+    image: ollama/ollama:latest
+    restart: "no"
+    volumes:
+      - ollama_models:/root/.ollama
+    entrypoint: >
+      sh -c "
+        until ollama list >/dev/null 2>&1; do sleep 2; done &&
+        ollama pull ${OLLAMA_MODEL:-qwen3:1.7b}
+      "
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+
+  # Continuous self-improvement loop — reads failures from verify.db,
+  # improves the system prompt, writes to data/system_prompt.txt.
+  # The proxy hot-reloads the new prompt within 60s without restarting.
+  improver:
+    build: .
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - |
+        echo "Improver: waiting for proxy..." &&
+        until python -c "import urllib.request; urllib.request.urlopen('http://proxy:5555/health')" 2>/dev/null; do sleep 5; done &&
+        echo "Improver: starting continuous feedback loop" &&
+        python -u -m scripts.feedback_loop \
+          --from-failures --auto-apply --continuous \
+          --idle-minutes 30 --rounds 2 \
+          --proxy-url http://proxy:5555
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:1.7b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-90}
+      OLLAMA_NUM_THREADS: ${OLLAMA_NUM_THREADS:-6}
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      ENGAGEMENT_ID: ${ENGAGEMENT_ID:-default}
+      VERIFY_ENABLED: "true"
+    volumes:
+      - pii_vault:/app/data        # shared with proxy — reads verify.db, writes system_prompt.txt
+    healthcheck:
+      disable: true
+    depends_on:
+      ollama:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+
+volumes:
+  pii_vault:
+  ollama_models:
