@@ -234,12 +234,12 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+:([^\s:]{6,128})$',
         re.MULTILINE,
     )),
-    # CrackMapExec / impacket inline credential: DOMAIN\user:Password (Pwn3d!)
+    # CrackMapExec / impacket inline credential: DOMAIN\user:Password (Pwn3d!) or end-of-line
     # Captures the password after the colon. One backslash in text (Python "\\").
-    # r'\\' in raw string = regex \\ = matches one literal backslash.
-    # @!#$ included in char class to handle passwords like Admin@Corp2024!
+    # Lookahead accepts both " (Pwn3d!)" suffix and bare end-of-line (no local admin case).
     ("CREDENTIAL", re.compile(
-        r'(?:\\|/)(?:[a-zA-Z0-9._\-]{2,40}):([A-Za-z0-9@!#$%^&*()\-_=+\[\]{};:,.<>?/]{6,128})\s+\(',
+        r'(?:\\|/)(?:[a-zA-Z0-9._\-]{2,40}):([A-Za-z0-9@!#$%^&*()\-_=+\[\]{};:,.<>?/]{6,128})(?=\s+\(|\s*$)',
+        re.MULTILINE,
     )),
     # Impacket-style DOMAIN/user:password@target (mssqlclient, psexec, secretsdump, etc.)
     # Captures password between colon and @ sign; stops before @ to handle password@host boundary.
@@ -401,6 +401,16 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     # Restricted to lines where Desc: follows or 3+ spaces (avoids "Host Name: Windows Server")
     ("PERSON", re.compile(
         r'\bName:\s+([A-ZÀ-Ÿ][a-zà-ÿ]{1,20}\s+[A-ZÀ-Ÿ][a-zà-ÿ]{1,20})(?=\s+Desc:|\s{3,}|$)',
+        re.MULTILINE,
+    )),
+    # Git Author line: "Author: First Last <email@domain>" — extract display name
+    ("PERSON", re.compile(
+        r'^Author:\s+([A-ZÀ-Ÿ][a-zà-ÿ]{1,20}(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ]{1,20})+)\s+<',
+        re.MULTILINE,
+    )),
+    # Chat log sender: "[HH:MM] First Last: message" — extract display name
+    ("PERSON", re.compile(
+        r'^\[\d{1,2}:\d{2}\]\s+([A-ZÀ-Ÿ][a-zà-ÿ]{1,20}(?:\s+[A-ZÀ-Ÿ][a-zà-ÿ]{1,20})+):',
         re.MULTILINE,
     )),
     # JSON "domain" field with all-caps NetBIOS value: "domain": "CONTOSO"

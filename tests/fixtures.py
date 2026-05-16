@@ -2243,6 +2243,31 @@ SMB         10.20.0.11    445    AURORA-FS01      Convidado:501:aad3b435b51404ee
     ],
 )
 
+CRACKMAPEXEC_NO_ADMIN = PentestFixture(
+    name="crackmapexec_no_pwned",
+    description="CrackMapExec spray where credential is valid but user lacks local admin (no Pwn3d!)",
+    text="""\
+$ crackmapexec smb 192.168.10.0/24 -u joao.silva -p 'Summer2024!' --continue-on-success
+SMB         192.168.10.5    445    STELLARTECH-DC01 [*] Windows Server 2022 Build 20348 x64 (name:STELLARTECH-DC01) (domain:STELLARTECH) (signing:True) (SMBv1:False)
+SMB         192.168.10.10   445    STELLARTECH-FS01 [*] Windows Server 2019 Build 17763 x64 (name:STELLARTECH-FS01) (domain:STELLARTECH) (signing:False) (SMBv1:False)
+SMB         192.168.10.20   445    STELLARTECH-APP01 [*] Windows 10 Build 19041 x64 (name:STELLARTECH-APP01) (domain:STELLARTECH) (signing:False) (SMBv1:False)
+SMB         192.168.10.5    445    STELLARTECH-DC01 [+] STELLARTECH\\joao.silva:Summer2024!
+SMB         192.168.10.10   445    STELLARTECH-FS01 [+] STELLARTECH\\joao.silva:Summer2024!
+SMB         192.168.10.20   445    STELLARTECH-APP01 [+] STELLARTECH\\joao.silva:Summer2024!
+
+$ crackmapexec smb 192.168.10.5 -u ana.ferreira -p 'Verao@2024' --continue-on-success
+SMB         192.168.10.5    445    STELLARTECH-DC01 [+] STELLARTECH\\ana.ferreira:Verao@2024 (Pwn3d!)
+""",
+    must_anonymize=[
+        "joao.silva", "Summer2024!",
+        "ana.ferreira", "Verao@2024",
+        "STELLARTECH",
+        "STELLARTECH-DC01", "STELLARTECH-FS01", "STELLARTECH-APP01",
+        "192.168.10.5", "192.168.10.10", "192.168.10.20",
+    ],
+    safe_to_keep=["crackmapexec", "smb", "SMB", "445", "Pwn3d", "signing", "SMBv1", "--continue-on-success"],
+)
+
 # Note on PAN collisions with the HASH NTLM-challenge pattern:
 # A 16-digit-only PAN (even one with an invalid Luhn checksum) is also matched
 # by the existing pattern ("HASH", r'\b[0-9a-fA-F]{16}\b') — NTLM challenges are
@@ -2643,6 +2668,7 @@ ALL_FIXTURES = [
     CLOUDTRAIL_LOGS,
     # Cycle 4 additions
     CRACKMAPEXEC_SMB,
+    CRACKMAPEXEC_NO_ADMIN,
     AI_KEYS_AND_PII_LEAK,
     BURPSUITE_HTTP_HISTORY,
     ZEEK_CONN_LOG,
