@@ -2243,6 +2243,53 @@ SMB         10.20.0.11    445    AURORA-FS01      Convidado:501:aad3b435b51404ee
     ],
 )
 
+# Note on PAN collisions with the HASH NTLM-challenge pattern:
+# A 16-digit-only PAN (even one with an invalid Luhn checksum) is also matched
+# by the existing pattern ("HASH", r'\b[0-9a-fA-F]{16}\b') — NTLM challenges are
+# 16 hex chars, and pure digits are a valid subset of hex. This means a "rejected
+# by Luhn" PAN of length 16 still gets anonymized via the HASH path. That is
+# acceptable for a pentest-anonymization proxy: extra anonymization is always safe.
+# The Luhn gate is what prevents FPs from MID-LENGTH digit sequences (13–15 and
+# 17–19) such as timestamps, log IDs, port-number runs — those do NOT match the
+# HASH pattern, so without Luhn they would have been silently flagged as PAN.
+# Bottom line: Luhn earns its keep at the boundary lengths; at length 16 the
+# HASH pattern wins regardless, and that is the right outcome here.
+AI_KEYS_AND_PII_LEAK = PentestFixture(
+    name="ai_keys_and_pii_leak",
+    description="Mixed leak: .env with AI provider keys, US SSN, valid+invalid Luhn PANs (Willow PR #2 coverage)",
+    text="""\
+$ cat .env
+ANTHROPIC_API_KEY=sk-ant-api03-AbCdEfGhIjKlMnOpQrSt12345
+GROQ_API_KEY=gsk_AbCdEfGhIjKlMnOpQrSt12345678
+CEREBRAS_API_KEY=csk-1234567890abcdefghij
+SAMBANOVA_API_KEY=sk_sn-prod-abcdef1234567890
+GEMINI_API_KEY=AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8
+
+$ grep -r 'SSN\\|card' notes/
+notes/customer.txt:Customer SSN: 536-12-3456
+notes/customer.txt:Real card (valid Luhn, MUST flag): 4532015112830366
+notes/customer.txt:Invalid SSN area code (must NOT flag): 666-12-3456
+notes/customer.txt:Invalid SSN area code (must NOT flag): 912-12-3456
+notes/customer.txt:Short digit run (must NOT flag, Luhn invalid): 4532015112839
+""",
+    must_anonymize=[
+        "sk-ant-api03-AbCdEfGhIjKlMnOpQrSt12345",
+        "gsk_AbCdEfGhIjKlMnOpQrSt12345678",
+        "csk-1234567890abcdefghij",
+        "sk_sn-prod-abcdef1234567890",
+        "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8",
+        "536-12-3456",
+        "4532015112830366",
+    ],
+    safe_to_keep=[
+        "ANTHROPIC_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY",
+        "cat", ".env", "grep",
+        "4532015112839",     # 13-digit invalid-Luhn — Luhn gate must reject this
+        "666-12-3456",       # Invalid SSN area code — regex must reject this
+        "912-12-3456",       # 9xx SSN area code — regex must reject this
+    ],
+)
+
 BURPSUITE_HTTP_HISTORY = PentestFixture(
     name="burpsuite_http_history",
     description="Burp Suite HTTP history with credentials in POST bodies and Authorization headers",
@@ -2596,6 +2643,7 @@ ALL_FIXTURES = [
     CLOUDTRAIL_LOGS,
     # Cycle 4 additions
     CRACKMAPEXEC_SMB,
+    AI_KEYS_AND_PII_LEAK,
     BURPSUITE_HTTP_HISTORY,
     ZEEK_CONN_LOG,
     # Cycle 6 additions — scanner outputs and IDS logs

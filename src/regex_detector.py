@@ -17,6 +17,13 @@ class RegexMatch:
     entity_type: str
 
 
+# ── Willow contribution (PR #2 by @rudi193-cmd) ───────────────────────────
+# Patterns marked "(Willow PR #2)" below were originally written for the
+# Willow project (https://github.com/rudi193-cmd/willow-1.9) and contributed
+# via PR #2. Integrated into _PATTERNS rather than as a parallel module so
+# there is one source of truth for RegexMatch and the pattern list.
+
+
 # (entity_type, compiled_pattern) — order matters
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     # CIDR before IP — avoid matching just the host part
@@ -116,9 +123,17 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         r'\bAC[a-f0-9]{32}\b'
     )),
     # Google API key (browser/server key): AIza followed by 35 alphanumeric/dash/underscore chars
+    # Also covers Gemini AIzaSy* keys (subset of the same Google key family).
     ("TOKEN", re.compile(
         r'\bAIza[0-9A-Za-z_\-]{35}\b'
     )),
+    # AI/LLM provider API keys (Willow PR #2).
+    # Common leak: a `.env` with the dev's OWN key gets read by Claude Code
+    # during a pentest and forwarded upstream in cleartext.
+    ("TOKEN", re.compile(r'\bsk-ant-[A-Za-z0-9_\-]{8,}\b')),    # Anthropic
+    ("TOKEN", re.compile(r'\bgsk_[A-Za-z0-9]{8,}\b')),           # Groq
+    ("TOKEN", re.compile(r'\bcsk-[A-Za-z0-9]{8,}\b')),           # Cerebras
+    ("TOKEN", re.compile(r'\bsk_sn-[A-Za-z0-9_\-]{8,}\b')),      # SambaNova
     # Shopify app/access tokens: shpat_ (access), shppa_ (private app), shpca_ (custom app)
     ("TOKEN", re.compile(
         r'\bshp(?:at|pa|ca|ss|ua)_[0-9a-fA-F]{32}\b'
@@ -161,6 +176,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("CREDENTIAL", re.compile(r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b')),           # CPF
     ("CREDENTIAL", re.compile(r'\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b')),     # CNPJ
     ("CREDENTIAL", re.compile(r'\b\d{2}\.\d{3}\.\d{3}-[\dXx]\b')),          # RG
+    # US SSN with built-in invalid-range filter: area (000/666/9xx), group (00),
+    # serial (0000) — all known-invalid by the SSA. (Willow PR #2)
+    ("CREDENTIAL", re.compile(
+        r'\b(?!000|666|9\d{2})\d{3}-?(?!00)\d{2}-?(?!0000)\d{4}\b'
+    )),
     # Brazilian phone numbers: +55 XX 9 XXXX-XXXX or +55 XX XXXX-XXXX (mobile + landline)
     ("IDENTIFIER", re.compile(
         r'\+55\s*\d{2}\s*(?:9\s*)?\d{4}[-\s]?\d{4}\b'
@@ -989,6 +1009,30 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
+# ── Payment card numbers (Willow PR #2) ───────────────────────────────────
+# Regex matches digit runs; detect() gates each match on _luhn_valid()
+# because regex cannot compute the Luhn checksum.
+
+_PAN_RE = re.compile(
+    r"\b(?:\d{4}[\s\-]?){3}\d{4}\b"
+    r"|\b\d{13,19}\b"
+)
+
+
+def _luhn_valid(number: str) -> bool:
+    digits = [int(c) for c in number if c.isdigit()]
+    if len(digits) < 13:
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
 def detect(text: str) -> list[RegexMatch]:
     """Run all patterns on text. Returns deduplicated matches (no overlaps).
 
@@ -1032,5 +1076,14 @@ def detect(text: str) -> list[RegexMatch]:
                 if value and value.strip():
                     matches.append(RegexMatch(text=value.strip(), entity_type=entity_type))
                 covered.append((entity_start, entity_end))
+
+    # PAN — separate pass because Luhn validation can't live inside _PATTERNS.
+    for m in _PAN_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        digits = re.sub(r"\D", "", m.group())
+        if len(digits) >= 13 and _luhn_valid(digits):
+            matches.append(RegexMatch(text=m.group().strip(), entity_type="CREDENTIAL"))
+            covered.append((m.start(), m.end()))
 
     return matches
