@@ -20,10 +20,13 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import webbrowser
@@ -150,6 +153,9 @@ def write_env(cfg: dict) -> None:
         f"# Platform : {SYSTEM} {platform.machine()}",
         f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "",
+        "# ── Deployment ───────────────────────────────────────────────",
+        f"DEPLOY_MODE={cfg.get('deploy_mode', 'vps')}",
+        "",
         "# ── VPS ──────────────────────────────────────────────────────",
         f"VPS_HOST={cfg.get('vps_host', '')}",
         f"PROXY_PORT={cfg.get('proxy_port', '5555')}",
@@ -157,7 +163,6 @@ def write_env(cfg: dict) -> None:
         "# ── Proxy ────────────────────────────────────────────────────",
         "PORT=8080",
         "HOST=0.0.0.0",
-        f"PROXY_SECRET={cfg.get('proxy_secret', generate_secret())}",
         "",
         "# ── Anthropic ────────────────────────────────────────────────",
         "ANTHROPIC_API_URL=https://api.anthropic.com",
@@ -183,7 +188,7 @@ def write_env(cfg: dict) -> None:
     if cfg.get("pentest_dir"):
         lines += ["", f"PENTEST_DIR={cfg['pentest_dir']}"]
     if cfg.get("ssh_key"):
-        lines += ["", f"# SSH_KEY={cfg['ssh_key']}  # uncomment to override default"]
+        lines += ["", f"SSH_KEY={cfg['ssh_key']}"]
     ENV_FILE.write_text("\n".join(lines) + "\n")
     ok(f"Configuration written to {ENV_FILE.name}")
 
@@ -220,12 +225,96 @@ def _save_env_key(key: str, value: str) -> None:
 
 # ── SSH helpers (Unix) ────────────────────────────────────────────────────────
 
+_CONTROL_PATH = "/tmp/dfai-ssh-%r@%h:%p"
+
+
 def _ssh_opts(cfg: dict) -> list[str]:
     key = cfg.get("ssh_key", "")
-    opts = ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
+    opts = [
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        "-o", "ControlMaster=auto",
+        "-o", f"ControlPath={_CONTROL_PATH}",
+        "-o", "ControlPersist=120",
+    ]
     if key and Path(key).exists():
         opts += ["-i", key, "-o", "IdentitiesOnly=yes"]
     return opts
+
+
+def _prime_ssh_agent(cfg: dict) -> None:
+    """Ask for SSH passphrase once (hidden) and load the key into the agent.
+    After this, all SSH/rsync/scp calls use the agent — no more prompts."""
+    if IS_WIN or not shutil.which("ssh-add"):
+        return
+    key = cfg.get("ssh_key", "")
+    # Fall back to common default key paths when none is configured
+    if not key or not Path(key).exists():
+        for candidate in ("id_rsa", "id_ed25519", "id_ecdsa", "id_vps_pentest"):
+            p = Path.home() / ".ssh" / candidate
+            if p.exists():
+                key = str(p)
+                break
+    if not key or not Path(key).exists():
+        return
+    key_path = Path(key)
+
+    # Key has no passphrase → add silently and return
+    if subprocess.run(
+        ["ssh-keygen", "-y", "-P", "", "-f", str(key_path)],
+        capture_output=True,
+    ).returncode == 0:
+        subprocess.run(["ssh-add", str(key_path)], capture_output=True)
+        return
+
+    # Check if the key is already loaded in a running agent
+    agent_keys = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True)
+    if agent_keys.returncode == 0:
+        fp_out = subprocess.run(
+            ["ssh-keygen", "-l", "-f", str(key_path)], capture_output=True, text=True
+        ).stdout
+        fp = fp_out.split()[1] if len(fp_out.split()) > 1 else ""
+        if fp and fp in agent_keys.stdout:
+            return  # Already loaded — nothing to do
+
+    # Ask once with proper hidden input
+    passphrase = getpass.getpass(f"  {C}SSH passphrase for {key_path.name}:{N} ")
+
+    # Write a tiny askpass helper (lives only for the duration of ssh-add)
+    fd, askpass = tempfile.mkstemp(prefix="dfai_", suffix=".sh")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(f'#!/bin/sh\nprintf "%s" {shlex.quote(passphrase)}\n')
+        os.chmod(askpass, stat.S_IRWXU)
+
+        # Start a new agent if none is running
+        if not os.environ.get("SSH_AUTH_SOCK"):
+            try:
+                out = subprocess.check_output(["ssh-agent", "-s"], text=True)
+                for line in out.splitlines():
+                    m = re.match(r"(\w+)=([^;]+);", line)
+                    if m:
+                        os.environ[m.group(1)] = m.group(2)
+            except Exception:
+                pass
+
+        env = {
+            **os.environ,
+            "SSH_ASKPASS": askpass,
+            "SSH_ASKPASS_REQUIRE": "force",
+            "DISPLAY": os.environ.get("DISPLAY") or "x",
+        }
+        result = subprocess.run(["ssh-add", str(key_path)], env=env, capture_output=True)
+    finally:
+        Path(askpass).unlink(missing_ok=True)
+
+    passphrase = ""  # clear from memory (best effort)
+
+    if result.returncode == 0:
+        ok("SSH key loaded — no more passphrase prompts this session.")
+    else:
+        warn("Could not load key into agent — SSH will prompt as needed.")
+    print()
 
 
 def _run_ssh(cfg: dict, remote_cmd: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -651,6 +740,7 @@ def do_install() -> None:
 
 def do_deploy(cfg: dict) -> None:
     header("Deploy — VPS")
+    _prime_ssh_agent(cfg)
     vps        = cfg["vps_host"]
     proxy_port = cfg.get("proxy_port", "5555")
     info(f"Target     : {vps}")
@@ -676,6 +766,10 @@ def do_deploy(cfg: dict) -> None:
             _paramiko_run(client, _DOCKER_INSTALL)
         ok("Docker ready")
         info("Starting containers...")
+        try:
+            _paramiko_run(client, f"cd {REMOTE_DIR} && docker compose -f docker-compose.vps.yml down --remove-orphans")
+        except Exception:
+            pass
         _paramiko_run(client, f"cd {REMOTE_DIR} && docker compose -f docker-compose.vps.yml up --build -d")
         ok("Containers started")
         client.close()
@@ -685,6 +779,14 @@ def do_deploy(cfg: dict) -> None:
         _rsync_to_vps(cfg)
         ok("Sync done")
         info("Uploading .env...")
+        # Ensure PROXY_SECRET is stripped before upload — it breaks the Anthropic SDK
+        # (TypeScript URL resolution discards any base URL path prefix).
+        if ENV_FILE.exists():
+            cleaned = "\n".join(
+                l for l in ENV_FILE.read_text().splitlines()
+                if not l.startswith("PROXY_SECRET=")
+            ) + "\n"
+            ENV_FILE.write_text(cleaned)
         _scp_env(cfg)
         ok(".env uploaded")
         info("Checking Docker...")
@@ -701,6 +803,9 @@ def do_deploy(cfg: dict) -> None:
         ), check=False)
         ok("Firewall configured")
         info("Starting containers...")
+        # Bring down first to release port bindings cleanly, then rebuild.
+        # Sleep gives the kernel time to release TCP ports before docker re-binds them.
+        _run_ssh(cfg, f"cd {REMOTE_DIR} && docker compose -f docker-compose.vps.yml down --remove-orphans --timeout 15 2>&1; sleep 3", check=False)
         _run_ssh_live(cfg, f"cd {REMOTE_DIR} && docker compose -f docker-compose.vps.yml up --build -d")
         ok("Containers started")
 
@@ -723,6 +828,7 @@ def do_deploy(cfg: dict) -> None:
 
 def do_sync(cfg: dict) -> None:
     header("Sync — push code to VPS and rebuild proxy")
+    _prime_ssh_agent(cfg)
     info("Syncing files...")
     if IS_WIN:
         client = _paramiko_connect(cfg)
@@ -751,23 +857,15 @@ def do_sync(cfg: dict) -> None:
 
 def do_connect(cfg: dict) -> None:
     proxy_port    = int(cfg.get("proxy_port", "5555"))
-    proxy_secret  = cfg.get("proxy_secret", "")
     engagement_id = cfg.get("engagement_id", "default")
 
     header("Connect — opening tunnel and launching Claude")
+    _prime_ssh_agent(cfg)
 
-    # Fetch PROXY_SECRET from VPS if missing locally
-    if not proxy_secret and not IS_WIN:
-        info("Fetching PROXY_SECRET from VPS...")
-        result = _run_ssh(cfg, f"grep '^PROXY_SECRET=' {REMOTE_DIR}/.env 2>/dev/null | cut -d= -f2-", check=False)
-        proxy_secret = result.stdout.strip()
-        if proxy_secret:
-            ok("PROXY_SECRET fetched from VPS")
-            _save_env_key("PROXY_SECRET", proxy_secret)
-
-    base_url = f"http://localhost:{proxy_port}"
-    if proxy_secret:
-        base_url = f"{base_url}/{proxy_secret}"
+    # Security: SSH tunnel + UFW port blocking protect the proxy.
+    # Path-based secrets don't work because the Anthropic SDK constructs
+    # URLs with absolute paths that replace any base URL path component.
+    base_url  = f"http://localhost:{proxy_port}"
 
     # Free stale port bindings
     for port in [proxy_port, OLLAMA_PORT]:
@@ -845,6 +943,30 @@ def do_connect(cfg: dict) -> None:
     env["ENGAGEMENT_ID"]      = engagement_id
     env["OLLAMA_HOST"]        = f"http://localhost:{OLLAMA_PORT}"
 
+    # Smoke test: verify Claude can reach the proxy before opening the full session
+    info("Testing proxy → Claude connection...")
+    try:
+        test = subprocess.run(
+            [claude_bin, "-p", "reply with exactly: proxy ok"],
+            env=env, cwd=launch_dir,
+            capture_output=True, text=True, timeout=30,
+        )
+        output = (test.stdout + test.stderr).strip()
+        if test.returncode == 0 and "403" not in output and "Forbidden" not in output:
+            ok("Proxy connection verified.")
+        else:
+            err("Proxy test failed. Claude returned:")
+            print(f"\n    {output[:300]}\n")
+            if "403" in output or "missing proxy token" in output:
+                warn("The proxy is rejecting requests (403).")
+                warn("The running container may still have PROXY_SECRET set from a previous deploy.")
+                warn("Fix: python3 wizard.py → Deploy (will restart containers cleanly).")
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        warn("Smoke test timed out — launching Claude anyway.")
+    except Exception as e:
+        warn(f"Smoke test skipped: {e}")
+
     # Let Claude handle Ctrl+C itself; restore after it exits
     if not IS_WIN:
         old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -861,6 +983,7 @@ def do_tunnel(cfg: dict, open_audit: bool = False) -> None:
     proxy_port = int(cfg.get("proxy_port", "5555"))
 
     header("Tunnel — SSH only")
+    _prime_ssh_agent(cfg)
 
     for port in [proxy_port, OLLAMA_PORT]:
         _kill_port(port)
@@ -902,18 +1025,64 @@ def do_tunnel(cfg: dict, open_audit: bool = False) -> None:
 
 # ── Main wizard ───────────────────────────────────────────────────────────────
 
+def _wizard_existing(cfg: dict) -> None:
+    """Action menu for a previously configured engagement."""
+    engagement_id = cfg.get("engagement_id", "?")
+
+    ok(f"Loaded saved configuration for '{engagement_id}'")
+    print()
+    print(f"  VPS Host   : {cfg.get('vps_host', 'N/A')}")
+    print(f"  Proxy Port : {cfg.get('proxy_port', '5555')}")
+    print(f"  SSH Key    : {cfg.get('ssh_key', 'default')}")
+    print(f"  Model      : {cfg.get('ollama_model', 'N/A')}")
+    print()
+    print(f"  {B}What would you like to do?{N}\n")
+    print(f"  {B}[1]{N} Connect   — open SSH tunnel and launch Claude")
+    print(f"  {B}[2]{N} Deploy    — re-deploy to VPS (rebuilds containers)")
+    print(f"  {B}[3]{N} Sync      — push code updates + rebuild proxy container")
+    print()
+    action = ask("Choice", default="1")
+    print()
+
+    if action == "1":
+        do_connect(cfg)
+    elif action == "2":
+        do_deploy(cfg)
+        print()
+        if ask_yn("Open tunnel and launch Claude now?", default=True):
+            print()
+            do_connect(cfg)
+        else:
+            info("When ready:  python3 wizard.py connect")
+    elif action == "3":
+        do_sync(cfg)
+    else:
+        err("Unknown choice — exiting.")
+
+
 def wizard(initial_engagement: str = "") -> None:
     header(f"DontFeedTheAI — Setup Wizard  ({SYSTEM} {platform.machine()})")
 
     # ── 0. New or existing engagement ─────────────────────────────────────────
     if not initial_engagement:
-        print(f"  {B}Are you starting a new engagement or updating an existing one?{N}\n")
+        saved = _load_env()
+        saved_id  = saved.get("engagement_id", "")
+        saved_vps = saved.get("vps_host", "")
+        has_saved = bool(saved_id and saved_vps)
+
+        print(f"  {B}Select an engagement:{N}\n")
         print(f"  {B}[1]{N} New engagement  — configure everything from scratch.")
-        print(f"  {B}[2]{N} Existing        — update config or re-deploy for a previous engagement.\n")
-        flow = ask("Choice", default="1")
+        if has_saved:
+            print(f"  {B}[2]{N} {saved_id}  ({saved_vps})")
         print()
-        if flow == "2":
-            initial_engagement = ask("Engagement / client name (must match the previous one)")
+
+        default_choice = "2" if has_saved else "1"
+        flow = ask("Choice", default=default_choice)
+        print()
+
+        if flow == "2" and has_saved:
+            _wizard_existing(saved)
+            return
         else:
             default_name = f"pentest-{datetime.now().strftime('%Y%m%d')}"
             initial_engagement = ask("Engagement / client name", default=default_name)
@@ -925,15 +1094,14 @@ def wizard(initial_engagement: str = "") -> None:
     print(f"  {B}[3]{N} Docker      — fully containerized, local.\n")
     mode = ask("Choice", default="1")
 
-    cfg: dict = {"engagement_id": initial_engagement}
+    mode_name = {"1": "vps", "2": "local", "3": "docker"}.get(mode, "local")
+    cfg: dict = {"engagement_id": initial_engagement, "deploy_mode": mode_name}
 
     # ── 2. VPS config ─────────────────────────────────────────────────────────
     if mode == "1":
         print()
-        cfg["vps_host"]    = ask("VPS address (e.g. root@1.2.3.4)")
-        cfg["proxy_port"]  = ask("Proxy port", default="5555")
-        cfg["proxy_secret"] = generate_secret()
-        ok("PROXY_SECRET auto-generated")
+        cfg["vps_host"]   = ask("VPS address (e.g. root@1.2.3.4)")
+        cfg["proxy_port"] = ask("Proxy port", default="5555")
 
         print()
         if not IS_WIN:
