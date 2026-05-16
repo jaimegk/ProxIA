@@ -308,7 +308,16 @@ async def _ollama_call(
 
     try:
         entities = json.loads(raw).get("entities", [])
-        entities = [e for e in entities if e.get("text", "") in full_text]
+        # Keep entities that have a non-empty `text` field actually present in the input.
+        # Different models return different JSON shapes — we tolerate missing/alt keys
+        # for type/label but require a real text span to score against.
+        entities = [
+            e for e in entities
+            if isinstance(e, dict)
+            and e.get("text")
+            and isinstance(e["text"], str)
+            and e["text"] in full_text
+        ]
     except Exception:
         entities = []
 
@@ -435,7 +444,10 @@ async def run_benchmark(model: str, timeout: int, chunked: bool = False) -> dict
             if entities and (misses or fps or i < 3):
                 print(f"    Entities found:", flush=True)
                 for e in entities:
-                    print(f"      [{e['type']}] {e['text']!r}", flush=True)
+                    # Some models return {text, label} or other shapes instead of {text, type}.
+                    # We only care about `text` for scoring — show whatever type-like field exists.
+                    etype = e.get("type") or e.get("label") or e.get("category") or "?"
+                    print(f"      [{etype}] {e.get('text', '')!r}", flush=True)
 
         except Exception as exc:
             print(f"  {R}ERROR:{NC} {exc}", flush=True)
