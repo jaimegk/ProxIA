@@ -113,6 +113,11 @@ _NEVER_ANONYMIZE: frozenset[str] = frozenset({
     "gcloud", "gsutil", "az",
     # LAPS — Microsoft feature name, not org identifier
     "laps",
+    # Generic network device / storage type names (not specific hostnames)
+    "nas", "san", "ups", "pdu", "idrac", "ilo",
+    # Collaboration / productivity tools (product names, not org resources)
+    "slack", "teams", "jira", "confluence", "notion", "trello", "asana",
+    "zendesk", "servicenow", "sharepoint",
     # Terraform / IaC — resource type names, not org-specific identifiers
     "aws_instance", "aws_db_instance", "aws_secretsmanager_secret_version",
     "aws_s3_bucket", "aws_iam_role", "aws_iam_policy", "aws_security_group",
@@ -213,6 +218,14 @@ _ALLCAPS_WORD_RE = re.compile(r'\b([A-Z][A-Z0-9\-]{2,20})\b')
 # first.last style username (not always caught by regex_detector for short names)
 _DOTNAME_RE = re.compile(r'\b[a-z]{2,12}\.[a-z]{2,15}\b')
 
+# Known domain suffixes / TLDs — a word.word pattern ending in one of these is
+# an FQDN component already handled by regex_detector, not a first.last username.
+_FQDN_SUFFIXES: frozenset[str] = frozenset({
+    "local", "corp", "internal", "lan", "intra", "home", "test", "example",
+    "com", "net", "org", "io", "br", "uk", "de", "fr", "es", "pt", "nl",
+    "gov", "edu", "mil", "int", "arpa",
+})
+
 # ALL-CAPS abbreviations that are never org/hostname identifiers.
 _SAFE_CAPS: frozenset[str] = frozenset({
     "TCP", "UDP", "HTTP", "HTTPS", "FTP", "SSH", "RDP", "LDAP", "DNS",
@@ -256,24 +269,33 @@ def _text_needs_llm(text: str) -> bool:
         return True
 
     # dot-separated potential usernames (short first.last not always caught by regex)
-    if _DOTNAME_RE.search(text):
+    # Skip matches that are clearly FQDN components (regex_detector already handles those):
+    #   - ends in a known TLD/suffix: "dynacare.local", "dc01.corp"
+    #   - immediately followed by "." meaning it's a middle segment: "server.dynacare.local"
+    for m in _DOTNAME_RE.finditer(text):
+        suffix = m.group().split(".")[-1].lower()
+        if suffix in _FQDN_SUFFIXES:
+            continue
+        if m.end() < len(text) and text[m.end()] == ".":
+            continue
         return True
 
     return False
 
 
-async def anonymize(text: str, is_tool_output: bool = False) -> str:
+async def anonymize(text: str, is_tool_output: bool = False, force_regex_only: bool = False) -> str:
     """
     Anonymize text.
 
     is_tool_output=True  → LLM + regex (LLM only called when pre-screening
                            detects potential contextual entities)
     is_tool_output=False → regex only (system prompts — structural, not target data)
+    force_regex_only=True → skip LLM entirely (Ollama unavailable fallback)
     """
     if not text or not text.strip():
         return text
 
-    use_llm = is_tool_output and _text_needs_llm(text)
+    use_llm = (not force_regex_only) and is_tool_output and _text_needs_llm(text)
     if is_tool_output and not use_llm:
         log.debug("LLM skipped: pre-screening found no contextual entities")
 
