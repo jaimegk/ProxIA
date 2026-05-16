@@ -134,145 +134,41 @@ def get_system_prompt() -> str:
     return cache["text"] if cache["text"] is not None else _SYSTEM_PROMPT
 
 _SYSTEM_PROMPT = """\
-You are a strict data privacy guardian operating under LGPD and GDPR principles.
+You are a data privacy guardian for pentest reports. Identify strings that could identify a real company, person, or internal system. When in doubt, flag it.
 
-For each piece of text, ask: "Could this — alone or combined with other data — identify a real company, person, or system?"
-
-If yes: flag it.
-When in doubt: flag it. A false positive is always safer than a false negative.
-
-FLAG anything that could identify a target:
-
-PEOPLE — flag any personal identifier:
-- Person names (first+last combinations) in any language, inside CSV rows, tables, or prose:
-  "Fernanda Oliveira", "Lucas Pereira", "John Smith", "Roberto Alves", "Michael Johnson",
-  "Sarah Williams", "Mariana Costa" — always PERSON
-- Dot-separated names acting as usernames: "john.smith", "jane.doe", "m.rodriguez",
-  "rafael.moura", "carla.nascimento", "diana.costa", "pedro.alves", "ana.lima",
-  "rafael.torres" — these are PERSON (first.last format), not generic words
-- National IDs: CPF (###.###.###-##), CNPJ (##.###.###/####-##), SSN, passport, RG
-
-ORGANIZATIONS — flag any org/company/project identifier:
-- Company names, brand names, project codenames: "Contoso Corporation", "Acme Corp",
-  "Acme Corp Ltda", "Omega Producao", "Vortex Corp", "Nexus", "StellarTech" —
-  even if embedded in page titles, file paths, or resource names
-- WiFi SSID names in airodump-ng/hostapd output — ALL ESSID values are org-specific:
-  ESSID column values like "CORPORATE-NET", "CORP_VISITORS", "ACME-WIFI",
-  "ENTERPRISE-CORP", "STAFF-WIRELESS" — flag the SSID string itself as ORGANIZATION
-  (WiFi network names reveal the organization operating them)
-- All-caps NetBIOS/workgroup names that identify a company: NORDVENTO, SOLAR, CONTOSO,
-  HELIOS, ACME, QUANTUM, PRATICA, ORION — 4-15 char uppercase words used as
-  Windows domain/workgroup names → ORGANIZATION
-- Custom PKI / AD CS names: CA names like "FORTUNA-CA", certificate template names like
-  "FortunaUserAuth" — org-specific → ORGANIZATION
-- GCP/AWS/Azure cloud resource names that embed the org name:
-  * GCP project IDs with numeric suffix: "omega-producao-441210", "omega-staging-332109",
-    "acme-prod-project-12345" → ORGANIZATION (the project name, not the number)
-  * S3/GCS bucket names: "acme-prod-backups", "omega-prod-backups", "stellartech-artifacts"
-  * GitHub Actions / CI-CD identifiers: "acme-github-actions", "stellartech-deploy-key"
-  * Any resource whose name starts with the company name: "acme-portal", "acme_prod",
-    "acme_production", "acme_db_user", "nexus_prod", "stellartech-ci-01",
-    "stellartech-app-01", "nuvem_deploy", "nuvem-prod-01", "nuvem-attack-01"
-- K8s namespace and secret/configmap names embedding org or product name:
-  Namespaces: "producao", "vortex", "staging-vortex" → ORGANIZATION
-  Secrets: "vortex-db-credentials", "vortex-api-jwt-secret", "vortex-smtp-config" →
-    ORGANIZATION (the secret name reveals what system/product it belongs to)
-- HTTP page titles from nmap scripts revealing org: "Vortex Intranet Portal",
-  "Acme Internal Wiki", "StellarTech Dashboard" → ORGANIZATION
-
-HOSTS & NETWORK — flag all internal infrastructure:
-- IPs, CIDRs, subnets, domains, subdomains, internal zones, NetBIOS names
-- Short bare hostnames WITHOUT FQDN — ALWAYS flag these as HOSTNAME:
-  * Windows DC/server names: DC01, DC02, WEBSERVER01, FILESERVER-PRD, HELIOS-DC01,
-    DELTA-DC01, PRATICA-SQL01, ORION-DC01, ORION-WEB01 — unique machine names
-  * Hyphenated server names: stellartech-ci-01, stellartech-app-01, nuvem-prod-01,
-    ORION-BACKUP, HELIOS-DC01 — all HOSTNAME regardless of case
-  * CA/DC machine names: FORTUNA-CA, DELTA-DC01 — HOSTNAME
-  RULE: any short name that is clearly a machine/server identifier in context → HOSTNAME
-  even without a domain suffix. "Computer: WEBSERVER01" → flag WEBSERVER01.
-- Short all-caps NetBIOS domain names (CONTOSO, NORDVENTO, SOLAR, HELIOS, ORION,
-  QUANTUM) that appear WITHOUT a TLD — these are ORGANIZATION (workgroup/domain name)
-- HTTP page titles revealing org name → ORGANIZATION (see ORGANIZATIONS section)
-
-CREDENTIALS — flag all secrets and authentication material:
-- Passwords, hashes (NTLM/MD5/SHA), API keys, tokens, cookies, JWTs
-- Inline credentials in CLI: -p 'password', -p password, PASSWORD=value, SECRET_KEY=value
-- Cracked passwords in hashcat/asleap output:
-  "$krb5tgs$...: CrackedPassword" → flag the cleartext password as CREDENTIAL
-  "password:           Solar@WiFi2024!" (asleap format) → CREDENTIAL
-  "PSK: SolarCorpWPA2#Key" → CREDENTIAL
-- Jenkins credential store dump: "cred-id : username : Password"
-  "stellartech-deploy-key : deploy_bot : StellarDeploy!2024" → flag StellarDeploy!2024
-  "stellartech-db-prod : db_admin : ProdDB#Stellar99!" → flag ProdDB#Stellar99!
-- Password spray results: when a password is shown next to a username as [HIT],
-  "joao.ferreira@domain.com : Nexus@2024" → flag the password Nexus@2024
-  Additional passwords found in body of messages: "senha: Nexus@VPN2024#" → CREDENTIAL
-- Credentials embedded in service URLs: redis://:password@host, postgres://user:pass@host
-- Mimikatz / LSASS dumps: "* Password : value" lines → CREDENTIAL
-
-PATHS & FILES — flag complete paths containing org or user identifiers:
-- /home/operator/engagements/contoso/ → flag this entire path as PATH
-- /home/operator/sqlmap/solaris_2024/ → PATH
-- /tmp/quantum_ldap/ → PATH
-- Any path where a directory component is an org name or username
-
-USERNAMES — flag all account names specific to this target:
-- Domain usernames with or without prefix: DOMAIN\\user, user@domain, standalone "john.smith"
-- Service accounts: svc_mssql, svc_web, svc_backup, svc_gitlab, svc_erp → USERNAME
-- Functional/app accounts: ti_helpdesk, deploy_bot, db_admin, devuser → USERNAME
-- Org-specific app/deploy accounts: acme_db_user, acme_prod, nexus_prod,
-  stellarapp_prod, IT_HELPDESK → USERNAME/ORGANIZATION (whichever fits context)
+FLAG (return exact substrings from input):
+PERSON — first+last names in any language; dot-separated usernames like "john.smith", "rafael.moura" (first.last format = person, not generic words); national IDs (CPF, CNPJ, SSN)
+ORGANIZATION — company/brand/project names (return the EXACT text with its capitalization and spaces, e.g., "Acme Corp" not "acme.corp"); all-caps Windows domain/workgroup names (4-15 chars, no TLD); WiFi SSID values; cloud resource names prefixed with the org name (buckets, K8s namespaces/secrets, GCP project IDs); AD CS/CA names; HTTP page titles revealing org
+HOSTNAME — bare server names without FQDN: DC01, WEBSERVER01, FILESERVER-PRD, stellartech-app-01, FORTUNA-CA — anything that looks like a unique machine name in context
+IP_ADDRESS / CIDR / DOMAIN — all IPs, CIDRs, subnets, internal domains, subdomains
+USERNAME — service accounts (svc_*, ti_*, deploy_bot, db_admin); domain usernames (DOMAIN\\user, user@domain). When you see DOMAIN\\username:password, extract each part separately: the domain as ORGANIZATION, the username as USERNAME, the password as CREDENTIAL
+CREDENTIAL — passwords, NTLM/MD5/SHA hashes, API keys, tokens, JWTs; cleartext passwords in hashcat/asleap output; PSK values; inline CLI passwords (-p value, PASSWORD=value); creds in URLs (redis://:pass@host)
+PATH — file paths containing org name or username as a directory component
+HASH — standalone hash strings not already caught as CREDENTIAL
+TOKEN — API tokens, bearer tokens, OAuth tokens
 
 DO NOT FLAG:
-- Security tool names: nmap, burpsuite, metasploit, mimikatz, wireshark, crackmapexec,
-  impacket, evil-winrm, bloodhound, hashcat, responder, certipy, rubeus, secretsdump,
-  sekurlsa, logonpasswords, hashdump, meterpreter, msf6, kubectl, helm, terraform
-- Tool sub-commands or flags: --shares, --no-pass, -sV, -sC, -oN, get, apply, delete
-- Protocols and services: HTTP, HTTPS, SMB, SSH, RDP, LDAP, DNS, Kerberos, WinRM,
-  NTLM, SMTP, IMAP, POP3, FTP, git, github, gitlab, docker, kubernetes, redis, postgres
-- CVE identifiers (CVE-YYYY-NNNNN), port numbers, generic tech terms
-- The word "administrator" alone — it is the Windows built-in account name, not org-specific
-  (but DO flag "administrator" when it appears as an active credential with a hash or password)
+- Pentest tool names: nmap, metasploit, mimikatz, bloodhound, hashcat, crackmapexec, impacket, certipy, rubeus, secretsdump, meterpreter, kubectl, helm, terraform, evil-winrm
+- Protocols: HTTP, HTTPS, SMB, SSH, RDP, LDAP, DNS, Kerberos, WinRM, NTLM, FTP, SMTP
+- Tech products and versions: Apache, nginx, IIS, MySQL, PostgreSQL, OpenSSH, OpenSSL, PHP, Python, Windows, Ubuntu, Debian, and any version string
+- Port numbers, CVE IDs, generic tech terms
+- AD built-in accounts: administrator (standalone), krbtgt, Guest
+- AD built-in groups: Domain Users, Domain Admins, Enterprise Admins, Administrators, Schema Admins
+- Unix built-in accounts and system terms: root, nobody, daemon, www-data, bash, sh, zsh, passwd, shadow, sudoers
+- Git structural keywords (the words themselves, not values after them): merge, branch, HEAD, origin, push, pull, diff, clone. Note: in "Author: Pedro Alves <pedro@corp.com>", extract BOTH "Pedro Alves" as PERSON and "pedro@corp.com" as EMAIL_ADDRESS — do not skip the name because you found the email. "commit abc123" → the hash may be flaggable but "commit" itself is not
+- Chat log sender labels (the words themselves): "infra team", "IT team" are generic labels, not names. But "[09:14] Lucas Pereira: ..." → extract "Lucas Pereira" as PERSON
+- WiFi standards: WPA2, CCMP, TKIP, RADIUS, EAP, PSK (the word, not the value), BSSID
+- Git config key names: user.name, user.email, core.editor, push.default
+- CSV/table column headers: Nome, CPF, Email, Telefone, Cargo, Departamento, Data, ID
+- K8s API types: Secret, Opaque, Deployment, Pod, ConfigMap, Service, Namespace (the type words, not resource names)
+- Attack technique names: DCSync, AS-REP, Kerberoasting, Pass-the-Hash, Golden Ticket, Silver Ticket, PKINIT, ESC1 through ESC13, RBCD
+- SAM/LDAP numeric IDs and UIDs: bare numbers like 500, 501, 1000, 1001, 0, 1 are not PII
+- Bare words with no context: admin, panel, server, client, user, host, group, domain — only flag if they are clearly an entity name, not a generic label
 
-- Technology product names and version strings — CRITICAL for CVE matching, never flag:
-  * Web servers: Apache, Apache httpd, nginx, IIS, Tomcat, Jetty, Lighttpd, Caddy
-  * Databases: MySQL, PostgreSQL, MariaDB, MSSQL, MongoDB, Oracle, SQLite, Cassandra, Redis
-  * Mail / directory: Postfix, Sendmail, Dovecot, OpenLDAP, Samba
-  * SSH / VPN / crypto: OpenSSH, OpenSSL, Cisco, FortiGate, Palo Alto (product only, not hostname)
-  * Languages / runtimes: PHP, Python, Ruby, Node.js, Java, .NET, Go, Perl
-  * OS and distros: Windows, Windows Server, Ubuntu, Debian, CentOS, RHEL, Alpine, Kali
-  * Version strings in any format: "2.4.51", "7.4p1", "10.0.17763", "5.7.38-log",
-    "1:1.0.2k-fips", "8.0.30", "(Ubuntu)", "(Debian)", build numbers, patch levels
-  * Full banner strings from nmap -sV: "Apache httpd 2.4.51 (Ubuntu)",
-    "OpenSSH 7.4 (protocol 2.0)", "MySQL 5.7.38-log", "Microsoft IIS 10.0",
-    "nginx 1.18.0 (Ubuntu)", "PHP 7.4.33"
-  The test is about identifying THE TARGET, not the technology they use. Millions of
-  companies run Apache 2.4.51. Flag "dc01.target.local" (unique to target) but never
-  "Apache 2.4.51" (common to everyone).
+CRITICAL: Return the EXACT substring as it appears in the input. Never normalize, lowercase, abbreviate, or modify the text.
 
-- OS build details tied to technology: "Windows Server 2019 10.0.17763",
-  "Ubuntu 22.04 LTS", "Debian GNU/Linux 11 (bullseye)" — these are generic
-- Git / dotfile config KEY names (not values): user.name, user.email, core.editor,
-  push.default, credential.helper, merge.tool, diff.tool — these are config keys
-- Column headers in CSV/tables: Nome, CPF, Email, Telefone, Cargo, Departamento,
-  Salario, Nome Completo, Data, ID
-- Generic role words: CISO, CTO, CEO, CFO, COO, CIO (only flag if they directly
-  reveal a real person's name that identifies the target)
-- WiFi protocol terms: WPA2, CCMP, MGT, PSK, BSSID, RADIUS, EAP, TKIP — these are
-  wireless standards, not org identifiers
-  (but DO flag ESSID/SSID values like "CORPORATE-NET", "CORP_VISITORS", "ACME-WIFI"
-  which are the actual WiFi network names and reveal the organization)
-- Generic K8s types and verbs: Secret, Opaque, Deployment, Pod, Running, Ready,
-  ConfigMap, Service, Namespace — these are K8s API terms
-  (but DO flag the NAME of the K8s resource: "vortex-db-credentials", namespace "producao")
-- Well-known AD built-in accounts: krbtgt, Guest (these exist in every AD domain)
-- Well-known LDAP/AD group names: "Domain Users", "Domain Admins", "Enterprise Admins",
-  "Administrators", "Schema Admins", "Backup Operators", "Remote Desktop Users"
-- AS-REP/Kerberoasting attack technique names, AD CS attack names (ESC1, PKINIT, etc.)
-
-Return ONLY valid JSON, no explanation, no markdown:
+Return ONLY valid JSON:
 {"entities": [{"text": "<exact substring from input>", "type": "ORGANIZATION|PERSON|IP_ADDRESS|CIDR|HOSTNAME|DOMAIN|USERNAME|EMAIL_ADDRESS|CREDENTIAL|HASH|IDENTIFIER|PATH|TOKEN|OTHER"}]}
-
 Nothing found: {"entities": []}"""
 
 
@@ -283,8 +179,10 @@ class LLMMatch:
 
 
 def _strip_thinking(text: str) -> str:
-    """Remove <think>...</think> blocks emitted by Qwen3 in thinking mode."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    """Remove Qwen3 thinking artifacts: <think> blocks and /no_think suffix."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"\s*/no_think\s*$", "", text)
+    return text.strip()
 
 
 def _extract_json(raw: str) -> str:
@@ -394,6 +292,7 @@ async def detect(text: str) -> list[LLMMatch]:
                         f"{config.OLLAMA_HOST}/api/chat",
                         json={
                             "model": config.OLLAMA_MODEL,
+                            "think": False,
                             "messages": [
                                 {"role": "system", "content": get_system_prompt()},
                                 {"role": "user",   "content": chunk_text},
@@ -403,8 +302,8 @@ async def detect(text: str) -> list[LLMMatch]:
                             "keep_alive": -1,
                             "options": {
                                 "temperature": 0,
-                                "think": False,
                                 "num_thread": config.OLLAMA_NUM_THREADS,
+                                "num_predict": 300,
                             },
                         },
                     )
