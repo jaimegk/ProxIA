@@ -109,17 +109,23 @@ async def startup() -> None:
         log.warning(f"Hardware detection skipped: {exc}")
 
     if config.LLM_ENABLED:
-        try:
-            await llm_detector.health_check()
-            ollama_status = "OK"
-        except OllamaUnavailableError as exc:
-            log.critical("=" * 60)
-            log.critical("STARTUP FAILED — Ollama is unreachable or missing model.")
-            log.critical(f"  {exc}")
-            log.critical("The proxy will NOT start without a working LLM layer.")
-            log.critical("Start Ollama and pull the model, then restart the proxy.")
-            log.critical("=" * 60)
-            raise SystemExit(1)
+        for attempt in range(1, 4):
+            try:
+                await llm_detector.health_check()
+                ollama_status = "OK"
+                break
+            except OllamaUnavailableError as exc:
+                if attempt < 3:
+                    log.warning(f"Ollama not ready (attempt {attempt}/3), retrying in 5s… {exc}")
+                    import asyncio
+                    await asyncio.sleep(5)
+                else:
+                    log.warning("=" * 60)
+                    log.warning("Ollama unreachable at startup — running regex-only mode.")
+                    log.warning(f"  {exc}")
+                    log.warning("LLM detection disabled until Ollama becomes available.")
+                    log.warning("=" * 60)
+                    ollama_status = "unreachable (regex-only)"
     else:
         ollama_status = "disabled (LLM_ENABLED=false)"
 
