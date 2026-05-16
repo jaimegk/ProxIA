@@ -250,7 +250,7 @@ def _prime_ssh_agent(cfg: dict) -> None:
     key = cfg.get("ssh_key", "")
     # Fall back to common default key paths when none is configured
     if not key or not Path(key).exists():
-        for candidate in ("id_rsa", "id_ed25519", "id_ecdsa", "id_vps_pentest"):
+        for candidate in ("id_ed25519", "id_rsa", "id_ecdsa"):
             p = Path.home() / ".ssh" / candidate
             if p.exists():
                 key = str(p)
@@ -1105,7 +1105,13 @@ def wizard(initial_engagement: str = "") -> None:
 
         print()
         if not IS_WIN:
-            default_key = str(Path.home() / ".ssh" / "id_vps_pentest")
+            # Suggest the first standard SSH key that exists on this machine.
+            ssh_dir = Path.home() / ".ssh"
+            default_key = next(
+                (str(ssh_dir / name) for name in ("id_ed25519", "id_rsa", "id_ecdsa")
+                 if (ssh_dir / name).exists()),
+                str(ssh_dir / "id_ed25519"),
+            )
             if not ssh_available():
                 warn("ssh not found in PATH — install OpenSSH or use WSL.")
             cfg["ssh_key"] = ask("SSH private key path", default=default_key)
