@@ -274,8 +274,13 @@ async def _ollama_call(
     timeout: int,
 ) -> tuple[list[dict], float, float]:
     """Single chunk call. hallu-guard against full_text."""
+    # think=False at TOP LEVEL — Ollama ignores it when placed under options.
+    # num_predict caps thinking-mode runaway: without it, Qwen3 can spin up
+    # thousands of tokens of <think> output and exceed any reasonable timeout.
+    # Mirrors src/llm_detector.py production call shape (commit 787a600).
     payload = {
         "model": model,
+        "think": False,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": chunk},
@@ -283,7 +288,11 @@ async def _ollama_call(
         "stream": False,
         "format": "json",
         "keep_alive": -1,
-        "options": {"temperature": 0, "think": False, "num_thread": 6},
+        "options": {
+            "temperature": 0,
+            "num_thread": 6,
+            "num_predict": 300,
+        },
     }
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{OLLAMA_HOST}/api/chat", json=payload)
