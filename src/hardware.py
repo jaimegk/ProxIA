@@ -116,18 +116,24 @@ def suggest_model(hw: HardwareInfo) -> str:
     """
     Return the heaviest PRIMARY model that fits within detected hardware.
     GPU/Apple Silicon allows running a tier above CPU-only RAM limits.
+    CPU-only machines are capped at qwen3:1.7b — RAM is not the bottleneck there,
+    inference speed is (qwen3:4b+ causes timeouts on typical VPS CPUs).
     """
     usable_ram = hw.ram_gb
+    cpu_only = hw.gpu_vram_gb == 0 and not hw.is_apple_silicon
 
-    # GPU/Apple-Si lets us run heavier models relative to RAM.
-    # Boosts are conservative — Apple Silicon 8 GB has unified memory but the OS
-    # still needs headroom, so we cap the effective RAM at 12 for 4-8 GB VRAM.
-    if hw.gpu_vram_gb >= 8:
-        usable_ram = max(usable_ram, 24)   # e.g. NVIDIA 4080 → qwen3:8b
-    elif hw.gpu_vram_gb >= 4:
-        usable_ram = max(usable_ram, 12)   # e.g. Apple Silicon 8 GB → qwen3:4b
-    elif hw.gpu_vram_gb >= 2:
-        usable_ram = max(usable_ram, 8)    # e.g. small GPU or Apple 6 GB → qwen3:4b
+    if cpu_only:
+        # On CPU-only hosts, cap at 4 GB effective RAM to prevent suggesting
+        # models too large for real-time inference (qwen3:4b @ 8 vCPU ≈ 50 t/s → timeouts)
+        usable_ram = min(usable_ram, 4)
+    else:
+        # GPU/Apple-Si lets us run heavier models relative to RAM.
+        if hw.gpu_vram_gb >= 8:
+            usable_ram = max(usable_ram, 24)   # e.g. NVIDIA 4080 → qwen3:8b
+        elif hw.gpu_vram_gb >= 4:
+            usable_ram = max(usable_ram, 12)   # e.g. Apple Silicon 8 GB → qwen3:4b
+        elif hw.gpu_vram_gb >= 2:
+            usable_ram = max(usable_ram, 8)    # e.g. small GPU or Apple 6 GB → qwen3:4b
 
     best = DEFAULT_MODEL
     for model_id, min_ram, is_primary, _ in MODEL_CATALOG:
