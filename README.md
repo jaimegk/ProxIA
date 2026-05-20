@@ -85,6 +85,8 @@ flowchart LR
 
 → See [docs/architecture.md](docs/architecture.md) for the full technical breakdown.
 
+**Other LLM clients:** OpenAI-compatible APIs (`/v1/chat/completions`) are supported for OpenAI, OpenRouter, and similar gateways — see [docs/providers.md](docs/providers.md). Claude Code continues to use `/v1/messages` via `ANTHROPIC_BASE_URL`.
+
 ---
 
 ## Quick Start
