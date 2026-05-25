@@ -1,6 +1,10 @@
 # DontFeedTheAI
 
 <p align="center">
+  <img src="docs/banner.png" alt="DontFeedTheAI banner" width="100%">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/python-3.11+-blue.svg" alt="Python">
   <img src="https://img.shields.io/badge/LLM-Ollama-green.svg" alt="Ollama">
