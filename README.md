@@ -18,7 +18,7 @@ A transparent proxy that strips IPs, credentials, hostnames, and PII from every 
 flowchart TD
     shell["🖥️ Your Shell\nnmap -sV dc01.acmecorp.local"]
     proxy["🛡️ DontFeedTheAI\ndc01.acmecorp.local → srv-0042.pentest.local\n10.20.0.10 → 203.0.113.47\nAdmin@Acme2024! → [CRED_XK9A2B3C]"]
-    api["☁️ Anthropic API\nsees only\nsrv-0042.pentest.local\n203.0.113.47"]
+    api["☁️ LLM API\nsees only\nsrv-0042.pentest.local\n203.0.113.47"]
 
     shell -- "① real data" --> proxy
     proxy -- "② surrogates only" --> api
@@ -33,13 +33,6 @@ flowchart TD
 
 Both run on your machine. Nothing sensitive crosses the boundary.
 
-### Cloud anonymization APIs exist
-but they mean a second bill and a second third party with your data.
-
-You're already paying Claude for reasoning. 
-
-The AI doesn't need your real data for that — only the structure and meaning of your questions.
-
 ---
 
 | Who | How it helps |
@@ -52,14 +45,14 @@ The AI doesn't need your real data for that — only the structure and meaning o
 
 ---
 
-## Why not just Ollama or Claude directly?
+## Why not just send data directly?
 
-**❌ Cloud anonymization API + Claude** — two bills, two third parties. Your sensitive data still leaves the machine, just through more hands.
+**❌ Cloud anonymization API + LLM** — two bills, two third parties. Your sensitive data still leaves the machine, just through more hands.
 
 ```mermaid
 flowchart LR
     s0["🖥️ Your Shell\nreal data"] --> a0["☁️ Anonymization API\nsees everything\nbill #1"]
-    a0 --> c0["☁️ Anthropic API\nbill #2"]
+    a0 --> c0["☁️ LLM API\nbill #2"]
 ```
 
 **❌ Ollama alone** — your data never leaves the machine, but Ollama has no awareness of what's sensitive.
@@ -70,39 +63,52 @@ flowchart LR
     s1["🖥️ Your Shell\nreal data"] --> o1["🧠 Ollama\nno interception\nreasons on real data"]
 ```
 
-**❌ Claude directly** — best reasoning quality, but everything lands in Anthropic's infrastructure.
-Real client IPs, credentials, org names in their API logs — one policy change or breach away from a problem.
+**❌ Claude / OpenAI directly** — best reasoning quality, but everything lands in their infrastructure.
+Real client IPs, credentials, org names in API logs — one policy change or breach away from a problem.
 
 ```mermaid
 flowchart LR
-    s2["🖥️ Your Shell\nreal data"] --> c1["☁️ Anthropic API\nsees everything\nlogs your real data"]
+    s2["🖥️ Your Shell\nreal data"] --> c1["☁️ LLM API\nsees everything\nlogs your real data"]
 ```
 
-**✅ DontFeedTheAI** — Claude's reasoning, Ollama's local detection, nothing sensitive crosses the boundary.
+**✅ DontFeedTheAI** — cloud reasoning quality, local detection, nothing sensitive crosses the boundary.
+Works with Claude Code, OpenAI SDK, OpenRouter, or any OpenAI-compatible client.
 
 ```mermaid
 flowchart LR
     s3["🖥️ Your Shell\nreal data"] --> p["🛡️ DontFeedTheAI"]
     o2["🧠 Ollama\nlocal detector\nnever leaves machine"] --> p
-    p --> c2["☁️ Anthropic API\nsees only surrogates"]
+    p --> c2["☁️ LLM API\nsees only surrogates"]
 ```
 
 → See [docs/architecture.md](docs/architecture.md) for the full technical breakdown.
-
-**Other LLM clients:** OpenAI-compatible APIs (`/v1/chat/completions`) are supported for OpenAI, OpenRouter, and similar gateways — see [docs/providers.md](docs/providers.md). Claude Code continues to use `/v1/messages` via `ANTHROPIC_BASE_URL`.
+For supported LLM clients and upstream configuration, see [docs/providers.md](docs/providers.md).
 
 ---
 
 ## Quick Start
 
+**With a VPS** (recommended for team use or persistent engagements):
+
 ```bash
 git clone https://github.com/zeroc00I/DontFeedTheAI
 cd DontFeedTheAI
-pip install -r requirements.txt
 python3 wizard.py
 ```
 
-The wizard asks everything — engagement name, where to run it, VPS address, model — then deploys, opens the tunnel, and launches Claude with the proxy active. Works on Windows, macOS, and Linux.
+The wizard asks everything — engagement name, VPS address, model — then deploys, opens the SSH tunnel, and launches Claude with the proxy active.
+
+**Locally without a VPS:**
+
+```bash
+python3 wizard.py setup       # create venv + install dependencies
+python3 wizard.py docker up   # start proxy + Ollama in Docker
+export ANTHROPIC_BASE_URL=http://localhost:8080
+export ENGAGEMENT_ID=my-engagement
+claude                        # or any OpenAI-compatible client
+```
+
+Works on Windows, macOS, and Linux.
 
 ```bash
 python3 wizard.py --help   # all available commands
@@ -115,6 +121,7 @@ python3 wizard.py --help   # all available commands
 | Doc | About |
 |--|--|
 | [Architecture](docs/architecture.md) | Two-layer pipeline, what gets anonymized and what doesn't, config reference |
+| [Providers](docs/providers.md) | Supported LLM clients: Claude Code, OpenAI SDK, OpenRouter |
 | [Contributing](docs/contributing.md) | How to add fixtures, run the improvement loop, open areas |
 | [Threat Model](docs/threat-model.md) | What this protects against, what it doesn't, limitations, roadmap |
 
