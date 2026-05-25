@@ -59,10 +59,20 @@ def test_deanonymize_chat_response_content_and_tool_args():
         ],
     }
 
-    with patch("src.providers.openai_compat.deanonymize") as mock_deanon:
-        mock_deanon.side_effect = lambda s: s.replace("[HOST_xkqpzt]", "dc01.contoso.local").replace(
-            "[USER_rfkw]", "jsmith"
-        )
+    def _replace(s: str) -> str:
+        return s.replace("[HOST_xkqpzt]", "dc01.contoso.local").replace("[USER_rfkw]", "jsmith")
+
+    def _replace_deep(obj):
+        if isinstance(obj, str):
+            return _replace(obj)
+        if isinstance(obj, dict):
+            return {k: _replace_deep(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_replace_deep(i) for i in obj]
+        return obj
+
+    with patch("src.providers.openai_compat.deanonymize", side_effect=_replace), \
+         patch("src.providers.openai_compat.deanon_value", side_effect=_replace_deep):
         out = openai_compat.deanonymize_chat_response(data)
 
     msg = out["choices"][0]["message"]

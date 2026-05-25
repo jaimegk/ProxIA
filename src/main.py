@@ -21,7 +21,7 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .anonymizer import anonymize, deanonymize
+from .anonymizer import anonymize, deanonymize, deanon_value
 from .config import config
 from . import llm_detector
 from .llm_detector import OllamaUnavailableError
@@ -602,16 +602,6 @@ async def _anon_request(body: dict) -> dict:
     return body
 
 
-def _deanon_value(obj):
-    if isinstance(obj, str):
-        return deanonymize(obj)
-    if isinstance(obj, dict):
-        return {k: _deanon_value(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_deanon_value(i) for i in obj]
-    return obj
-
-
 def _deanon_response(data: dict) -> dict:
     """Deanonymize all text and tool_use inputs in an Anthropic response."""
     for block in data.get("content", []):
@@ -620,7 +610,7 @@ def _deanon_response(data: dict) -> dict:
             block["text"] = deanonymize(block.get("text", ""))
         elif t == "tool_use":
             # Deanonymize tool inputs so Claude Code executes commands with real values
-            block["input"] = _deanon_value(block.get("input", {}))
+            block["input"] = deanon_value(block.get("input", {}))
     return data
 
 

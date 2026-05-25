@@ -416,6 +416,17 @@ async def anonymize(text: str, is_tool_output: bool = False, force_regex_only: b
     return result
 
 
+def deanon_value(obj):
+    """Recursively deanonymize strings inside any JSON-like structure."""
+    if isinstance(obj, str):
+        return deanonymize(obj)
+    if isinstance(obj, dict):
+        return {k: deanon_value(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [deanon_value(i) for i in obj]
+    return obj
+
+
 def deanonymize(text: str) -> str:
     """Replace all surrogates with their originals for the current engagement."""
     if not text:

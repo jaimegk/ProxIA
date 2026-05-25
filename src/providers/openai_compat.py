@@ -9,17 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-from ..anonymizer import anonymize, deanonymize
-
-
-def _deanon_value(obj: Any) -> Any:
-    if isinstance(obj, str):
-        return deanonymize(obj)
-    if isinstance(obj, dict):
-        return {k: _deanon_value(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_deanon_value(i) for i in obj]
-    return obj
+from ..anonymizer import anonymize, deanonymize, deanon_value
 
 
 async def _anon_content_parts(content: Any, *, is_tool_output: bool) -> Any:
@@ -49,15 +39,16 @@ async def anonymize_chat_request(body: dict) -> dict:
         if not isinstance(msg, dict):
             continue
         role = msg.get("role", "")
-        if role == "user":
+        if role in ("user", "tool"):
             msg["content"] = await _anon_content_parts(
                 msg.get("content", ""),
                 is_tool_output=True,
             )
-        elif role == "tool":
+        elif role == "system":
+            # regex-only: structural prompt, not raw target data
             msg["content"] = await _anon_content_parts(
                 msg.get("content", ""),
-                is_tool_output=True,
+                is_tool_output=False,
             )
         # assistant: already surrogate text from prior turns — skip
 
@@ -77,11 +68,11 @@ def _deanon_message(message: dict) -> dict:
         if isinstance(args, str) and args.strip():
             try:
                 parsed = json.loads(args)
-                fn["arguments"] = json.dumps(_deanon_value(parsed))
+                fn["arguments"] = json.dumps(deanon_value(parsed))
             except json.JSONDecodeError:
                 fn["arguments"] = deanonymize(args)
         elif isinstance(args, dict):
-            fn["arguments"] = json.dumps(_deanon_value(args))
+            fn["arguments"] = json.dumps(deanon_value(args))
 
     return message
 
