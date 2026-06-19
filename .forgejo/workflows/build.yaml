@@ -1,0 +1,42 @@
+name: CI DontFeedTheAI
+
+# Se ejecutará cada vez que alguien haga push o cree un Pull Request a la rama 'main'
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-and-test:
+    # Necesitas que tu forgejo-runner tenga esta etiqueta configurada
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # Si el repo usa requirements.txt, esto cachea los paquetes para que sea más rápido
+          cache: "pip"
+
+      - name: 📦 Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          # Instalamos pytest para los tests y las dependencias del proyecto
+          pip install pytest httpx
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: 🧪 Ejecutar Tests (Validar anonimización)
+        # Ejecutamos la suite de tests. Si un test falla, el pipeline se corta aquí en rojo.
+        run: |
+          pytest tests/
+
+      - name: 🐳 Construir la Imagen Docker
+        # Como el proyecto tiene un Dockerfile, la prueba de fuego de la compilación es construirlo
+        run: |
+          docker build -t dontfeedtheai:latest .
+          docker image ls | grep dontfeedtheai
