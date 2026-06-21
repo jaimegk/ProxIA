@@ -12,13 +12,16 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
 </p>
 
-A transparent proxy that strips IPs, credentials, hostnames, and PII from every request before it reaches the AI — and restores them on the way back.
+A transparent proxy that strips names, IPs, credentials, payment data, IDs, and
+other PII from every request before it reaches the AI — and restores them on the
+way back. Works with **any** Claude Code usage, **including subscription plans**
+(it relays your auth untouched; it never sees your API key or plan).
 
 ```mermaid
 flowchart TD
-    shell["🖥️ Your Shell\nnmap -sV dc01.acmecorp.local"]
-    proxy["🛡️ DontFeedTheAI\ndc01.acmecorp.local → srv-0042.pentest.local\n10.20.0.10 → 203.0.113.47\nAdmin@Acme2024! → [CRED_XK9A2B3C]"]
-    api["☁️ LLM API\nsees only\nsrv-0042.pentest.local\n203.0.113.47"]
+    shell["🖥️ Your Shell / Claude Code\nPatient Daniel Fuentes, card 4532 0151 1283 0366"]
+    proxy["🛡️ DontFeedTheAI\nDaniel Fuentes → Taylor Mosley\n4532 0151 1283 0366 → 9328 0135 1527 5286 (valid Luhn)\ndaniel@acme.com → obwobi@example.com"]
+    api["☁️ LLM API\nsees only\nsurrogates"]
 
     shell -- "① real data" --> proxy
     proxy -- "② surrogates only" --> api
@@ -28,20 +31,25 @@ flowchart TD
 
 | Layer | Detects |
 |---|---|
-| 🧠 **Ollama (local LLM)** | hostnames, org names, credentials in prose |
-| 🔍 **Regex** | IPs, hashes, tokens, API keys |
+| 🧠 **Ollama (local LLM)** | names, org names, addresses, credentials in prose |
+| 🔍 **Regex** | IPs, hashes, tokens/API keys, cards (Luhn), IBANs (mod-97), SSN/DNI, phones, MRNs |
 
 Both run on your machine. Nothing sensitive crosses the boundary.
+
+**PII families covered:** financial (cards · IBAN · SWIFT · accounts), identity
+documents (SSN · DNI/NIE · passport · CPF/CNPJ), contact & personal (international
+phones · postal addresses · dates of birth), and health (MRN · patient IDs).
 
 ---
 
 | Who | How it helps |
 |-----|-------------|
-| **Pentesters** | Run nmap, mimikatz, bloodhound output through Claude without exposing client infrastructure |
 | **Developers & SREs** | Debug with production data or internal configs in regulated environments |
 | **Legal & consulting** | Anonymize client contracts, case files, or proprietary IP in AI-assisted reviews |
-| **Finance & compliance** | Analyze reports or audit scripts without exposing account details |
+| **Finance & compliance** | Analyze reports or audit scripts without exposing account or card details |
+| **Healthcare & HR** | Review records or onboarding data without leaking patient/employee PII |
 | **Researchers** | Query LLMs on confidential datasets |
+| **Pentesters** | Run nmap, mimikatz, bloodhound output through Claude without exposing client infrastructure |
 
 ---
 
@@ -88,25 +96,34 @@ For supported LLM clients and upstream configuration, see [docs/providers.md](do
 
 ## Quick Start
 
-**With a VPS** (recommended for team use or persistent engagements):
+**Local-first** (recommended — everything stays on your machine):
 
 ```bash
 git clone https://github.com/zeroc00I/DontFeedTheAI
 cd DontFeedTheAI
-python3 wizard.py
-```
-
-The wizard asks everything — engagement name, VPS address, model — then deploys, opens the SSH tunnel, and launches Claude with the proxy active.
-
-**Locally without a VPS:**
-
-```bash
 python3 wizard.py setup       # create venv + install dependencies
 python3 wizard.py docker up   # start proxy + Ollama in Docker
 export ANTHROPIC_BASE_URL=http://localhost:8080
-export ENGAGEMENT_ID=my-engagement
+export NAMESPACE=my-project   # isolates surrogate mappings per context
 claude                        # or any OpenAI-compatible client
 ```
+
+Or just run `python3 wizard.py` for a guided, interactive setup.
+
+> **Subscription plans work too.** The proxy relays your `Authorization` /
+> `x-api-key` headers untouched, so it is agnostic to how you pay — Claude Code
+> logged in with a **Pro/Max subscription** routes through it exactly the same as
+> pay-per-use API keys. Just point `ANTHROPIC_BASE_URL` at the proxy and launch
+> `claude` as usual. (Mind your provider's terms when routing traffic through a
+> proxy.)
+
+**Advanced — with a VPS** (for team use or a persistent, always-on proxy):
+
+```bash
+python3 wizard.py            # interactive: pick the "VPS (adv.)" mode
+```
+
+The wizard asks everything — namespace, VPS address, model — then deploys, opens the SSH tunnel, and launches Claude with the proxy active.
 
 Works on Windows, macOS, and Linux.
 
