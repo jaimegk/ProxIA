@@ -2,9 +2,20 @@
 
 ## What this project is
 
-A FastAPI reverse proxy that sits between the pentester's shell and the Anthropic API.
-Every tool output (nmap, mimikatz, bloodhound, etc.) is **anonymized before reaching Claude**
-and **de-anonymized before returning to the terminal** — so the LLM never sees client data.
+A FastAPI reverse proxy that sits between any client (Claude Code, an OpenAI-compatible
+SDK, a browser tool) and the upstream LLM API. Every request body is **anonymized before
+reaching the cloud LLM** and **de-anonymized before returning to the caller** — so the LLM
+never sees real PII or secrets.
+
+It is a **generic PII anonymizer**, not pentest-specific. It covers four PII families —
+financial (cards/IBAN/SWIFT/accounts), identity documents (SSN/DNI/NIE/passport/CPF/CNPJ),
+contact & personal (international phones/postal addresses/dates of birth) and health
+(MRN/patient IDs) — on top of structural secrets (API keys, tokens, hashes, internal
+hostnames/IPs) and contextual entities (person/org names) caught by the local LLM. Pentest
+tool output is just one more supported source of org-specific data.
+
+Works with **any** Claude Code usage including **subscription plans**: the proxy relays the
+`Authorization` / `x-api-key` headers untouched, so it is agnostic to the billing method.
 
 The single entry point for everything is `wizard.py`. No shell scripts. Cross-platform (Windows / macOS / Linux).
 
@@ -65,21 +76,25 @@ LOOP FOREVER:
 The script will tell you "layer is clean — add new fixtures" when there's nothing mechanical
 to fix. That message means: it's your turn to think of a new scenario.
 
-Good sources for new scenarios (pick tools not yet in tests/fixtures.py):
-- Offensive tools: WinPEAS, Empire/Covenant C2, Nuclei, theHarvester, Shodan CLI, Pacu (AWS)
-- Cloud: Azure CLI `az ad` / `az keyvault`, GCP `gcloud iam`, AWS CloudTrail logs
-- Network: Zeek/Bro logs, Suricata alerts, tcpdump with creds in cleartext
-- Post-exploitation: Volatility memory forensics, reg.py, secretsdump variants
-- Red team infra: Cobalt Strike malleable C2, phishing GoPhish campaign results
-- Mobile/IoT: ADB shell output, firmware strings with hardcoded creds
+Good sources for new scenarios (pick scenarios not yet in tests/fixtures.py):
+- Financial: invoices/receipts with cards+IBAN+SWIFT, bank statements, payroll exports, Stripe/PayPal dumps
+- Identity: passports, driver's licenses, tax forms (SSN/DNI/NIE/CPF), KYC onboarding records
+- Contact/personal: CVs/résumés with phone+address, CRM exports, support tickets with customer PII
+- Health: clinical notes with MRN+diagnosis, lab results, insurance claims (member IDs)
+- Dev/infra: `.env` files, Terraform state, CI logs, k8s secrets, cloud CLI output (az/gcloud/aws)
+- Offensive tools (still supported): WinPEAS, Empire/Covenant C2, Nuclei, Volatility, GoPhish, ADB
 
 ## Current baseline
 
-- **53 fixtures** · **679 must-anonymize items** · **99.6% catch rate (regex-only) · 0 false positives**
-- Remaining 3 leaks are contextual entities (bare first names, org shortnames, device aliases)
-  that require the LLM layer — cannot be caught by regex alone.
+- **59 fixtures** · **723 must-anonymize items** · **100% catch rate (regex-only) · 0 false positives**
+- Generic PII entity types (shape/checksum-preserving surrogates): `CREDIT_CARD` (Luhn),
+  `IBAN` (mod-97), `SWIFT`, `BANK_ACCOUNT`, `NATIONAL_ID` (SSN/DNI-NIE mod-23/CPF/CNPJ/RG),
+  `PHONE` (intl E.164), `DATE_OF_BIRTH`, `HEALTH_ID` (MRN), `POSTAL_ADDRESS`.
 - Token patterns covered: AWS (AKIA/ASIA/AIDA/AROA), Stripe, SendGrid, GitHub PATs, Slack (xoxb/xoxp),
   Square, Mailgun, MailChimp, Twilio SID, Google API keys, Shopify, GCP ya29, JWT, whsec_
+- Validated numeric passes (`_luhn_valid`, `_iban_valid`, `_dni_valid`) run FIRST in
+  `regex_detector.detect()` so cards/IBANs/IDs claim their span with the correct type.
+- Bare contextual person names with no label still need the LLM layer (by design).
 
 ## False positive defense (wordfreq)
 

@@ -4,7 +4,8 @@ Surrogate (fake value) generator.
 Rules:
   - Surrogates must be realistic in format but clearly not real data
   - IPs use RFC 5737 TEST-NET ranges (192.0.2.x, 198.51.100.x, 203.0.113.x)
-  - Domains use .pentest.local TLD
+  - Domains/emails use RFC 2606 reserved names (.example.com) — never resolve
+  - Cards/IBANs/IDs/phones preserve shape (length, separators, valid checksums)
   - Hashes maintain length and hex format
   - Credentials are replaced with a clear REDACTED marker
 """
@@ -44,9 +45,148 @@ def generate_surrogate(original: str, entity_type: str) -> str:
         "PATH":          _fake_path,
         "TOKEN":         _fake_token_smart,
         "IDENTIFIER":    _fake_identifier_smart,
+        # ── Generic PII families ──────────────────────────────────────────
+        "CREDIT_CARD":     _fake_credit_card,
+        "IBAN":            _fake_iban,
+        "SWIFT":           _fake_swift,
+        "BANK_ACCOUNT":    _fake_bank_account,
+        "NATIONAL_ID":     _fake_national_id,
+        "PHONE":           _fake_phone,
+        "DATE_OF_BIRTH":   _fake_dob,
+        "HEALTH_ID":       _fake_health_id,
+        "POSTAL_ADDRESS":  _fake_postal_address,
     }
     fn = generators.get(entity_type, _fake_generic)
     return fn(original)
+
+
+# ── Shape-preserving helpers for generic PII ──────────────────────────────────
+
+def _mask_digits(original: str) -> str:
+    """Replace every digit with a random digit; keep all other chars (separators,
+    letters, '+', parentheses) exactly in place. Used for phones, accounts, IDs."""
+    return "".join(random.choice(string.digits) if c.isdigit() else c for c in original)
+
+
+def _luhn_check_digit(partial: str) -> str:
+    """Return the check digit that makes `partial` (without it) Luhn-valid."""
+    digits = [int(c) for c in partial]
+    total = 0
+    # `partial` has no check digit yet; the check digit will sit at an even index
+    # from the right (position 0), so existing digits start doubling at position 1.
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 0:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return str((10 - total % 10) % 10)
+
+
+def _fake_credit_card(original: str) -> str:
+    """Same length and separator layout, regenerated digits, valid Luhn."""
+    def _gen() -> str:
+        positions = [i for i, c in enumerate(original) if c.isdigit()]
+        n = len(positions)
+        if n < 13:
+            return _mask_digits(original)
+        body = [random.choice(string.digits) for _ in range(n - 1)]
+        check = _luhn_check_digit("".join(body))
+        new_digits = body + [check]
+        chars = list(original)
+        for pos, d in zip(positions, new_digits):
+            chars[pos] = d
+        return "".join(chars)
+    return _unique(_gen)
+
+
+def _fake_iban(original: str) -> str:
+    """Keep the 2-letter country code and length; regenerate BBAN with valid
+    ISO 7064 mod-97 check digits."""
+    compact = "".join(ch for ch in original if not ch.isspace())
+    country = compact[:2].upper() if compact[:2].isalpha() else "ES"
+    bban_len = max(len(compact) - 4, 11)
+
+    def _gen() -> str:
+        bban = "".join(random.choices(string.digits, k=bban_len))
+        rearranged = bban + country + "00"
+        numeric = "".join(str(int(c, 36)) for c in rearranged)
+        check = 98 - (int(numeric) % 97)
+        iban = f"{country}{check:02d}{bban}"
+        # Re-apply the original spacing pattern if it had grouped blocks.
+        if " " in original:
+            return " ".join(iban[i:i + 4] for i in range(0, len(iban), 4))
+        return iban
+    return _unique(_gen)
+
+
+def _fake_swift(original: str) -> str:
+    """BIC shape: 4-letter bank + 2-letter country + 2 alnum location + optional
+    3 alnum branch. Preserves the original length (8 or 11)."""
+    def _gen() -> str:
+        bank = "".join(random.choices(string.ascii_uppercase, k=4))
+        country = "".join(random.choices(string.ascii_uppercase, k=2))
+        loc = "".join(random.choices(string.ascii_uppercase + string.digits, k=2))
+        branch = ""
+        if len(original.strip()) > 8:
+            branch = "".join(random.choices(string.ascii_uppercase + string.digits, k=3))
+        return bank + country + loc + branch
+    return _unique(_gen)
+
+
+def _fake_bank_account(original: str) -> str:
+    return _unique(lambda: _mask_digits(original))
+
+
+_DNI_CONTROL = "TRWAGMYFPDXBNJZSQVHLCKE"
+
+
+def _fake_national_id(original: str) -> str:
+    """Mask digits, keep separators/letters. For Spanish DNI/NIE the trailing
+    control letter is recomputed so the surrogate still validates (mod-23)."""
+    import re as _re
+    dni = _re.fullmatch(r"([XYZ]?)(\d{7,8})[-]?([A-HJ-NP-TV-Z])", original.upper())
+    if dni:
+        prefix = dni.group(1)
+        n_digits = len(dni.group(2))
+
+        def _gen() -> str:
+            number = "".join(random.choices(string.digits, k=n_digits))
+            nie_map = {"X": "0", "Y": "1", "Z": "2"}
+            numeric = (nie_map.get(prefix, "") + number) if prefix else number
+            letter = _DNI_CONTROL[int(numeric) % 23] if len(numeric) == 8 else "Z"
+            sep = "-" if "-" in original else ""
+            return f"{prefix}{number}{sep}{letter}"
+        return _unique(_gen)
+    return _unique(lambda: _mask_digits(original))
+
+
+def _fake_phone(original: str) -> str:
+    return _unique(lambda: _mask_digits(original))
+
+
+def _fake_dob(original: str) -> str:
+    """Plausible birth date in the same delimiter/ordering as the original."""
+    import re as _re
+    sep_m = _re.search(r"[-/.]", original)
+    sep = sep_m.group() if sep_m else "-"
+    y = random.randint(1950, 2005)
+    mo = random.randint(1, 12)
+    d = random.randint(1, 28)
+    parts = original.split(sep)
+    # ISO (YYYY first) vs day-first layouts — match whichever the original used.
+    if parts and len(parts[0]) == 4:
+        return _unique(lambda: f"{y:04d}{sep}{mo:02d}{sep}{d:02d}")
+    return _unique(lambda: f"{d:02d}{sep}{mo:02d}{sep}{y:04d}")
+
+
+def _fake_health_id(original: str) -> str:
+    """Keep any leading letter prefix and separators; randomize the digits."""
+    return _unique(lambda: _mask_digits(original))
+
+
+def _fake_postal_address(_original: str) -> str:
+    return _unique(lambda: fake.address().replace("\n", ", "))
 
 
 def _unique(fn) -> str:
@@ -77,7 +217,8 @@ def _fake_hostname(_original: str) -> str:
 
 
 def _fake_domain(_original: str) -> str:
-    return _unique(lambda: fake.lexify("??????").lower() + ".pentest.local")
+    # RFC 2606 reserved TLD/domain — guaranteed never to resolve to a real host.
+    return _unique(lambda: fake.lexify("??????").lower() + ".example.com")
 
 
 def _fake_username(_original: str) -> str:
@@ -85,7 +226,8 @@ def _fake_username(_original: str) -> str:
 
 
 def _fake_email(_original: str) -> str:
-    return _unique(lambda: fake.lexify("??????").lower() + "@example.pentest")
+    # RFC 2606 reserved domain — never a real mailbox.
+    return _unique(lambda: fake.lexify("??????").lower() + "@example.com")
 
 
 def _fake_url(_original: str) -> str:

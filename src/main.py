@@ -21,7 +21,7 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .anonymizer import anonymize, deanonymize, deanon_value
+from .anonymizer import anonymize, deanonymize, deanon_value, anon_value
 from .config import config
 from . import llm_detector
 from .llm_detector import OllamaUnavailableError
@@ -49,7 +49,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("cc-proxy")
 
-app = FastAPI(title="pentest-proxy", version="1.0.0")
+app = FastAPI(title="anonymizing-proxy", version="1.0.0")
 
 # Tracks the wall-clock time of the last real /v1/messages request.
 # Used by the improver to decide whether to start a cycle.
@@ -132,8 +132,8 @@ async def startup() -> None:
         ollama_status = "disabled (LLM_ENABLED=false)"
 
     log.info("=" * 60)
-    log.info(f"pentest-proxy started")
-    log.info(f"  engagement  : {config.ENGAGEMENT_ID}")
+    log.info(f"anonymizing-proxy started")
+    log.info(f"  namespace   : {config.NAMESPACE}")
     log.info(f"  vault       : {config.DATABASE_PATH}")
     log.info(f"  ollama      : {config.OLLAMA_HOST}  model={config.OLLAMA_MODEL}  [{ollama_status}]")
     log.info(f"  verify      : {config.VERIFY_ENABLED}")
@@ -149,6 +149,17 @@ async def health() -> dict:
         "vault_stats": get_stats(),
         "llm_enabled": config.LLM_ENABLED,
     }
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root() -> dict:
+    """Lightweight liveness probe for the proxy root.
+
+    Some clients (incl. Claude Code) send `HEAD /` to check connectivity.
+    Answer locally instead of letting it fall through to the catch-all and
+    return 405 — and never forward a bare root probe upstream.
+    """
+    return {"status": "ok", "service": "anonymizing-proxy"}
 
 
 # ── Audit dashboard ───────────────────────────────────────────────────────────
@@ -773,6 +784,7 @@ async def proxy_messages(request: Request) -> Response:
             f"{config.ANTHROPIC_API_URL}/v1/messages",
             json=body,
             headers=headers,
+            params=dict(request.query_params),
         )
     api_ms = (time.perf_counter() - t_api_start) * 1000
 
@@ -857,6 +869,7 @@ async def proxy_chat_completions(request: Request) -> Response:
             f"{upstream}/v1/chat/completions",
             json=body,
             headers=headers,
+            params=dict(request.query_params),
         )
     api_ms = (time.perf_counter() - t_api_start) * 1000
 
@@ -895,22 +908,67 @@ async def proxy_chat_completions(request: Request) -> Response:
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy_catchall(request: Request, path: str) -> Response:
-    """Pass-through for other upstream endpoints (/v1/models, embeddings, …)."""
+    """Anonymizing pass-through for endpoints without a dedicated handler
+    (count_tokens, batches, embeddings, /v1/models, …).
+
+    Best-effort policy (never blocks):
+      - JSON body → parse, anonymize every text field recursively, forward,
+        then deanonymize the JSON response.
+      - Non-JSON / unparseable / binary → forward untouched and log a warning
+        so the gap is visible (multipart file uploads, raw streams).
+    """
     headers = _filter_forward_headers(request)
-    body = await request.body()
+    raw_body = await request.body()
     upstream = upstream_base_for_path(path)
+    content_type = request.headers.get("content-type", "")
+
+    forward_body = raw_body
+    json_mode = False
+    if raw_body and "application/json" in content_type.lower():
+        try:
+            parsed = json.loads(raw_body)
+        except Exception:
+            log.warning(f"catch-all {path}: content-type JSON but body not parseable "
+                        f"— forwarding raw ({len(raw_body)} bytes)")
+        else:
+            try:
+                anonymized = await anon_value(parsed, is_tool_output=True)
+                forward_body = json.dumps(anonymized).encode()
+                json_mode = True
+                # content-length is stripped by _filter_forward_headers; httpx recomputes it
+            except OllamaUnavailableError as exc:
+                log.error(f"catch-all {path}: Ollama unavailable — blocking: {exc}")
+                return _ollama_unavailable_response(
+                    openai_shape=path.lstrip("/").startswith("v1/chat")
+                )
+    elif raw_body:
+        log.warning(f"catch-all {path}: non-JSON body ({content_type or 'no content-type'}) "
+                    f"forwarded without anonymization ({len(raw_body)} bytes)")
 
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.request(
             method=request.method,
             url=f"{upstream}/{path}",
             headers=headers,
-            content=body,
+            content=forward_body,
             params=dict(request.query_params),
         )
+
+    # Deanonymize JSON responses so the client sees real values again.
+    resp_ct = resp.headers.get("content-type", "application/json")
+    if json_mode and "application/json" in resp_ct.lower():
+        try:
+            data = deanon_value(resp.json())
+            return Response(
+                content=json.dumps(data),
+                status_code=resp.status_code,
+                media_type="application/json",
+            )
+        except Exception as exc:
+            log.warning(f"catch-all {path}: could not deanonymize response: {exc}")
 
     return Response(
         content=resp.content,
         status_code=resp.status_code,
-        media_type=resp.headers.get("content-type", "application/json"),
+        media_type=resp_ct,
     )

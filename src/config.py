@@ -19,8 +19,12 @@ class Config:
     # 0 = let Ollama decide (uses all cores); 4 = conservative, lower temps.
     OLLAMA_NUM_THREADS: int = int(os.getenv("OLLAMA_NUM_THREADS", "4"))
 
-    # Engagement — isolates vault entries per client (change between engagements)
-    ENGAGEMENT_ID: str = os.getenv("ENGAGEMENT_ID", "default")
+    # Namespace — isolates vault entries per context (project, client, dataset…).
+    # Change it to keep surrogate mappings from different contexts separate.
+    # NAMESPACE is the generic name; ENGAGEMENT_ID is kept for backwards compat.
+    NAMESPACE: str = os.getenv("NAMESPACE", os.getenv("ENGAGEMENT_ID", "default"))
+    # Alias — existing code/tools/env still reference ENGAGEMENT_ID.
+    ENGAGEMENT_ID: str = NAMESPACE
 
     # Storage
     DATA_DIR: Path = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))

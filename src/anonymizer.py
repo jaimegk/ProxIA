@@ -177,6 +177,9 @@ _FREQ_THRESHOLD: dict[str, float] = {
 _STRUCTURAL_TYPES = frozenset({
     "HASH", "TOKEN", "CREDENTIAL", "IDENTIFIER", "MAC_ADDRESS",
     "IP_ADDRESS", "CIDR", "URL", "EMAIL_ADDRESS", "PATH", "DOMAIN",
+    # Generic PII families — all structural/validated, never word-frequency filtered
+    "CREDIT_CARD", "IBAN", "SWIFT", "BANK_ACCOUNT", "NATIONAL_ID",
+    "PHONE", "DATE_OF_BIRTH", "HEALTH_ID", "POSTAL_ADDRESS",
 })
 # Languages to check (covers the vast majority of pentest engagement locales)
 _FREQ_LANGS = ("en", "pt", "es", "fr", "de", "it", "nl", "pl")
@@ -329,7 +332,8 @@ async def anonymize(text: str, is_tool_output: bool = False, force_regex_only: b
     # company name, or deanonymization produces broken output.
     _REGEX_WINS = {"TOKEN", "HASH", "CREDENTIAL", "IDENTIFIER", "MAC_ADDRESS",
                    "IP_ADDRESS", "CIDR", "URL", "DOMAIN", "HOSTNAME", "EMAIL_ADDRESS",
-                   "PATH"}
+                   "PATH", "CREDIT_CARD", "IBAN", "SWIFT", "BANK_ACCOUNT",
+                   "NATIONAL_ID", "PHONE", "DATE_OF_BIRTH", "HEALTH_ID", "POSTAL_ADDRESS"}
     entities: dict[str, str] = {}   # original_text → entity_type
     _from_regex: set[str] = set()  # entities sourced from regex (trusted, no wordfreq filter)
 
@@ -424,6 +428,22 @@ def deanon_value(obj):
         return {k: deanon_value(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [deanon_value(i) for i in obj]
+    return obj
+
+
+async def anon_value(obj, is_tool_output: bool = True):
+    """Recursively anonymize strings inside any JSON-like structure.
+
+    Mirror of deanon_value for the request direction. Used by the catch-all
+    proxy route so endpoints without a dedicated handler (count_tokens, batches,
+    embeddings, …) still get their text fields anonymized before forwarding.
+    """
+    if isinstance(obj, str):
+        return await anonymize(obj, is_tool_output=is_tool_output)
+    if isinstance(obj, dict):
+        return {k: await anon_value(v, is_tool_output) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [await anon_value(i, is_tool_output) for i in obj]
     return obj
 
 

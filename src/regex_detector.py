@@ -172,14 +172,14 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("TOKEN", re.compile(
         r'\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b'
     )),
-    # Brazilian tax IDs and identity documents
-    ("CREDENTIAL", re.compile(r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b')),           # CPF
-    ("CREDENTIAL", re.compile(r'\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b')),     # CNPJ
-    ("CREDENTIAL", re.compile(r'\b\d{2}\.\d{3}\.\d{3}-[\dXx]\b')),          # RG
+    # National identity documents (shape-preserving NATIONAL_ID surrogate)
+    ("NATIONAL_ID", re.compile(r'\b\d{3}\.\d{3}\.\d{3}-\d{2}\b')),           # CPF (BR)
+    ("NATIONAL_ID", re.compile(r'\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b')),     # CNPJ (BR)
+    ("NATIONAL_ID", re.compile(r'\b\d{2}\.\d{3}\.\d{3}-[\dXx]\b')),          # RG (BR)
     # US SSN with built-in invalid-range filter: area (000/666/9xx), group (00),
     # serial (0000) — all known-invalid by the SSA. (Willow PR #2)
-    ("CREDENTIAL", re.compile(
-        r'\b(?!000|666|9\d{2})\d{3}-?(?!00)\d{2}-?(?!0000)\d{4}\b'
+    ("NATIONAL_ID", re.compile(
+        r'\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b'
     )),
     # Brazilian phone numbers: +55 XX 9 XXXX-XXXX or +55 XX XXXX-XXXX (mobile + landline)
     ("IDENTIFIER", re.compile(
@@ -1016,6 +1016,68 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         r'Hash\.Target\s*[.:]+\s+(\S+)',
         re.MULTILINE,
     )),
+
+    # Person name after a common record label, in EN/ES/PT:
+    #   "Patient: Daniel Fuentes", "paciente Marcos Tovar (DNI …)",
+    #   "Account holder: Olivia Brennan", "Manager: Sofia Castellano",
+    #   "titular: …", "transfer to Marcus Lindqvist for …".
+    # Both words must be Title-case (first upper, rest lower) so all-caps labels
+    # like "IT Team" or "Domain Admins" do not match.
+    ("PERSON", re.compile(
+        r'(?i:patient|paciente|account\s+holder|cardholder|titular|policy\s*holder|'
+        r'beneficiary|beneficiario|asegurado|attending\s+physician|physician|'
+        r'm[ée]dico|doctora?|manager|client|customer|cliente|holder|emplead[oa]|'
+        r'funcion[áa]ri[oa]|destinatario|remitente|'
+        r'transfer\s+to|paid\s+to|payable\s+to|transferencia\s+a|pagar\s+a|a\s+favor\s+de)'
+        r'\s*:?\s+(?:Dr\.?\s+|Dra\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+|D\.?\s+|D[ñn]a\.?\s+)?'
+        r'([A-ZÀ-Ÿ][a-zà-ÿ]{1,20}\s+[A-ZÀ-Ÿ][a-zà-ÿ]{1,20})\b',
+    )),
+    # Person name immediately before a parenthetical national ID: "Marcos Tovar (DNI …"
+    # A full name followed by "(DNI"/"(NIE"/"(SSN"/"(CPF" is an unambiguous person.
+    ("PERSON", re.compile(
+        r'([A-ZÀ-Ÿ][a-zà-ÿ]{1,20}\s+[A-ZÀ-Ÿ][a-zà-ÿ]{1,20})\s*\((?i:DNI|NIE|SSN|CPF|CNPJ|ID)\b',
+    )),
+
+    # ── Generic PII families (financial / identity / contact / health) ─────────
+
+    # International phone numbers in E.164 / formatted form: +34 612 345 678,
+    # +1 (555) 123-4567, +44 20 7946 0958. Requires a leading "+" and country
+    # code to avoid matching version strings or bare digit runs. The BR-specific
+    # +55 pattern above fires first for Brazilian numbers (overlap dedup).
+    ("PHONE", re.compile(
+        r'\+[1-9]\d{0,2}(?:[\s\-]?\(?\d{1,4}\)?){1,5}\d{2,4}'
+    )),
+    # Phone after explicit label (national format without +): "Phone: 612 345 678",
+    # "Tel: (555) 123-4567", "Teléfono: 91 234 56 78", "Mobile: 07700 900123"
+    ("PHONE", re.compile(
+        r'(?i:tel(?:efono|éfono|ephone)?|phone|mobile|m[oó]vil|celular|fax|whatsapp)'
+        r'\s*[:#]?\s*(\(?\d[\d\s\-().]{6,17}\d)',
+    )),
+    # SWIFT / BIC bank code (labeled, to avoid matching any 8 uppercase letters):
+    #   "SWIFT: BSCHESMMXXX"  "BIC: DEUTDEFF"
+    ("SWIFT", re.compile(
+        r'(?i:SWIFT(?:[\s/]?BIC)?|BIC)\s*(?:code)?\s*[:#]?\s+([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b',
+    )),
+    # Bank account after label (generic, contextual): "Account No: 12345678",
+    # "Cuenta: 0049 1500 05 1234567892", "Routing: 021000021"
+    ("BANK_ACCOUNT", re.compile(
+        r'(?i:account\s*(?:no|number|#)?|cuenta|routing(?:\s*number)?|sort\s*code|aba)'
+        r'\s*[:#]?\s*([\d][\d\s\-]{5,32}\d)',
+    )),
+    # Date of birth (labeled). Captures ISO and DD/MM/YYYY style dates only when a
+    # birth-context label precedes them — avoids anonymizing every date in a log.
+    ("DATE_OF_BIRTH", re.compile(
+        r'(?i:date\s+of\s+birth|d\.?o\.?b\.?|born(?:\s+on)?|fecha\s+de\s+nacimiento|'
+        r'nacimiento|nascimento|geburtsdatum|geboren)'
+        r'\s*[:#]?\s*(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})',
+    )),
+    # Medical record number / health identifiers (labeled):
+    #   "MRN: A1234567"  "Medical Record No: 0099887"  "Historia clínica: HC-44821"
+    ("HEALTH_ID", re.compile(
+        r'(?i:MRN|medical\s+record\s*(?:number|no|#)?|patient\s+id|health\s+id|'
+        r'historia\s+cl[ií]nica|n[º°]?\s*historia|NHS\s*(?:number)?)'
+        r'\s*[:#]?\s*([A-Z]{0,3}[-]?\d[A-Z0-9\-]{3,19})',
+    )),
 ]
 
 
@@ -1043,6 +1105,42 @@ def _luhn_valid(number: str) -> bool:
     return total % 10 == 0
 
 
+# ── IBAN (validated via mod-97, like PAN's Luhn gate) ──────────────────────
+# Raw shape: 2 country letters + 2 check digits + 11–30 alphanumeric (BBAN),
+# optionally grouped in spaces of 4. detect() validates ISO 7064 mod-97-10.
+_IBAN_RE = re.compile(
+    r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}[ ]?[A-Z0-9]{0,3}\b"
+)
+
+
+def _iban_valid(candidate: str) -> bool:
+    iban = re.sub(r"\s", "", candidate).upper()
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{11,30}", iban):
+        return False
+    rearranged = iban[4:] + iban[:4]
+    # Map letters A–Z to 10–35, then compute the integer mod 97.
+    digits = "".join(str(int(c, 36)) for c in rearranged)
+    return int(digits) % 97 == 1
+
+
+# ── Spanish DNI / NIE (validated via mod-23 control letter) ────────────────
+_DNI_RE = re.compile(r"\b[XYZ]?\d{7,8}[-]?[A-HJ-NP-TV-Z]\b")
+_DNI_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
+
+
+def _dni_valid(candidate: str) -> bool:
+    s = candidate.replace("-", "").upper()
+    m = re.fullmatch(r"([XYZ]?)(\d{7,8})([A-HJ-NP-TV-Z])", s)
+    if not m:
+        return False
+    prefix, number, letter = m.groups()
+    nie_map = {"X": "0", "Y": "1", "Z": "2"}
+    numeric = (nie_map.get(prefix, "") + number) if prefix else number
+    if len(numeric) != 8:
+        return False
+    return _DNI_LETTERS[int(numeric) % 23] == letter
+
+
 def detect(text: str) -> list[RegexMatch]:
     """Run all patterns on text. Returns deduplicated matches (no overlaps).
 
@@ -1061,6 +1159,33 @@ def detect(text: str) -> list[RegexMatch]:
 
     def _overlaps(s: int, e: int) -> bool:
         return any(s < ce and e > cs for cs, ce in covered)
+
+    # ── Validated numeric PII passes run FIRST ────────────────────────────────
+    # Credit cards, IBANs and national IDs are digit/alnum runs that a generic
+    # hash/identifier pattern would otherwise claim with the wrong type (and thus
+    # the wrong surrogate shape). Running their checksum-gated passes before the
+    # main pattern loop lets them reserve their span with the correct entity type.
+    for m in _PAN_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        digits = re.sub(r"\D", "", m.group())
+        if len(digits) >= 13 and _luhn_valid(digits):
+            matches.append(RegexMatch(text=m.group().strip(), entity_type="CREDIT_CARD"))
+            covered.append((m.start(), m.end()))
+
+    for m in _IBAN_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        if _iban_valid(m.group()):
+            matches.append(RegexMatch(text=m.group().strip(), entity_type="IBAN"))
+            covered.append((m.start(), m.end()))
+
+    for m in _DNI_RE.finditer(text):
+        if _overlaps(m.start(), m.end()):
+            continue
+        if _dni_valid(m.group()):
+            matches.append(RegexMatch(text=m.group().strip(), entity_type="NATIONAL_ID"))
+            covered.append((m.start(), m.end()))
 
     for entity_type, pattern in _PATTERNS:
         for m in pattern.finditer(text):
@@ -1086,14 +1211,5 @@ def detect(text: str) -> list[RegexMatch]:
                 if value and value.strip():
                     matches.append(RegexMatch(text=value.strip(), entity_type=entity_type))
                 covered.append((entity_start, entity_end))
-
-    # PAN — separate pass because Luhn validation can't live inside _PATTERNS.
-    for m in _PAN_RE.finditer(text):
-        if _overlaps(m.start(), m.end()):
-            continue
-        digits = re.sub(r"\D", "", m.group())
-        if len(digits) >= 13 and _luhn_valid(digits):
-            matches.append(RegexMatch(text=m.group().strip(), entity_type="CREDENTIAL"))
-            covered.append((m.start(), m.end()))
 
     return matches

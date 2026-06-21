@@ -1,21 +1,32 @@
 """
-Pentest output fixtures with ground truth.
+PII anonymization fixtures with ground truth.
 
-Each fixture defines:
-  text            — realistic tool output containing sensitive data
+Each fixture defines a realistic scenario (tool output, an invoice, a medical
+record, an HR email, a config file…) containing sensitive data, plus:
+  text            — the realistic text containing sensitive data
   must_anonymize  — strings that MUST NOT appear after anonymization (0% leak policy)
   safe_to_keep    — generic strings that SHOULD survive anonymization
+
+Scenarios span the four PII families (financial, identity documents, contact /
+personal, health) as well as the structural secrets (API keys, tokens, hashes,
+internal hostnames) that any developer or operator might accidentally feed to a
+cloud LLM. Security-tool outputs are kept too: they are simply one more source
+of org-specific data that must not leak.
 """
 from dataclasses import dataclass, field
 
 
 @dataclass
-class PentestFixture:
+class PIIFixture:
     name: str
     description: str
     text: str
     must_anonymize: list[str]
     safe_to_keep: list[str] = field(default_factory=list)
+
+
+# Backwards-compatible alias — existing fixtures were authored as PentestFixture.
+PentestFixture = PIIFixture
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -2614,6 +2625,110 @@ ENCRYPTION_KEY=AuR0rA$3cr3tK3y2024
     ],
 )
 
+# ── Generic PII scenarios (financial / identity / contact / health) ───────────
+
+INVOICE_PAYMENT = PIIFixture(
+    name="invoice_payment_details",
+    description="Invoice email with card, IBAN, SWIFT and billing contact",
+    text="""\
+From: billing@acme-supplies.example
+To: Patricia Romero <patricia.romero@gmail.com>
+Subject: Invoice INV-2024-00871
+
+Dear Patricia Romero,
+
+Payment received for invoice INV-2024-00871.
+Card charged: 4532 0151 1283 0366 (Visa)
+Bank transfer details for refunds:
+  IBAN: ES91 2100 0418 4502 0005 1332
+  SWIFT: BSCHESMMXXX
+  Account holder: Patricia Romero
+Billing phone: +34 612 345 678
+""",
+    must_anonymize=[
+        "Patricia Romero",
+        "patricia.romero@gmail.com",
+        "4532 0151 1283 0366",
+        "ES91 2100 0418 4502 0005 1332",
+        "BSCHESMMXXX",
+        "+34 612 345 678",
+    ],
+    safe_to_keep=["Invoice", "IBAN", "SWIFT", "Visa", "Payment received"],
+)
+
+MEDICAL_RECORD = PIIFixture(
+    name="medical_record_summary",
+    description="Clinical record with MRN, patient DOB and national ID",
+    text="""\
+PATIENT SUMMARY — Internal Medicine
+MRN: A1234567
+Patient: Daniel Fuentes
+Date of birth: 1985-03-12
+National ID (DNI): 12345678Z
+Contact phone: +34 699 112 233
+Email: daniel.fuentes@hotmail.com
+Diagnosis code: E11.9 (type 2 diabetes)
+Attending physician: Dr. Helena Marsh
+""",
+    must_anonymize=[
+        "A1234567",
+        "Daniel Fuentes",
+        "1985-03-12",
+        "12345678Z",
+        "+34 699 112 233",
+        "daniel.fuentes@hotmail.com",
+        "Helena Marsh",
+    ],
+    safe_to_keep=["MRN", "Date of birth", "Diagnosis code", "E11.9", "type 2 diabetes"],
+)
+
+HR_ONBOARDING = PIIFixture(
+    name="hr_onboarding_record",
+    description="HR onboarding note with address, SSN-style ID and personal contact",
+    text="""\
+New hire record — Engineering
+Full Name                    James Wilson
+Personal email: james.wilson89@outlook.com
+Mobile: +1 (212) 555-0143
+Home address: 742 Evergreen Terrace, Springfield, IL 62704
+Social Security: 536-12-3456
+Start date: 2024-02-05
+Manager: Sofia Castellano
+""",
+    must_anonymize=[
+        "James Wilson",
+        "james.wilson89@outlook.com",
+        "+1 (212) 555-0143",
+        "536-12-3456",
+        "Sofia Castellano",
+    ],
+    safe_to_keep=["New hire record", "Engineering", "Start date", "Manager"],
+)
+
+BANK_STATEMENT = PIIFixture(
+    name="bank_statement_line",
+    description="Personal bank statement with account, routing and counterparty",
+    text="""\
+MONTHLY STATEMENT — Personal Checking
+Account holder: Olivia Brennan
+Account No: 0049 1500 05 1234567892
+Routing: 021000021
+IBAN: DE89 3704 0044 0532 0130 00
+Recent transfer to Marcus Lindqvist for consulting services.
+Statement contact: olivia.brennan@protonmail.com
+""",
+    must_anonymize=[
+        "Olivia Brennan",
+        "0049 1500 05 1234567892",
+        "021000021",
+        "DE89 3704 0044 0532 0130 00",
+        "Marcus Lindqvist",
+        "olivia.brennan@protonmail.com",
+    ],
+    safe_to_keep=["MONTHLY STATEMENT", "Personal Checking", "Account No", "Routing", "IBAN"],
+)
+
+
 ALL_FIXTURES = [
     NMAP_SCAN,
     NMAP_SERVICE_VERSIONS,
@@ -2678,4 +2793,9 @@ ALL_FIXTURES = [
     SURICATA_ALERTS,
     # Cycle 7 additions — mobile/IoT and extended env-var credentials
     ADB_MOBILE_PENTEST,
+    # Generic PII scenarios — financial / identity / contact / health families
+    INVOICE_PAYMENT,
+    MEDICAL_RECORD,
+    HR_ONBOARDING,
+    BANK_STATEMENT,
 ]

@@ -910,7 +910,7 @@ def do_connect(cfg: dict) -> None:
 
     # Resolve working directory
     pentest_dir = cfg.get("pentest_dir", "")
-    launch_dir  = pentest_dir or str(Path.home() / "pentests" / engagement_id)
+    launch_dir  = pentest_dir or str(Path.home() / "projects" / engagement_id)
     Path(launch_dir).mkdir(parents=True, exist_ok=True)
 
     # Open audit UI in browser
@@ -1084,15 +1084,21 @@ def wizard(initial_engagement: str = "") -> None:
             _wizard_existing(saved)
             return
         else:
-            default_name = f"pentest-{datetime.now().strftime('%Y%m%d')}"
-            initial_engagement = ask("Engagement / client name", default=default_name)
+            default_name = f"project-{datetime.now().strftime('%Y%m%d')}"
+            initial_engagement = ask("Namespace / project name", default=default_name)
 
     # ── 1. Deployment mode ────────────────────────────────────────────────────
+    # Local-first: running everything on this machine is the simplest, most
+    # private default. VPS is offered as an advanced option for shared/remote use.
     print(f"\n  {B}Deployment mode:{N}\n")
-    print(f"  {B}[1]{N} VPS         — recommended. Proxy + Ollama run remotely, SSH tunnel to localhost.")
-    print(f"  {B}[2]{N} Local       — everything on this machine (Apple Silicon / Linux).")
-    print(f"  {B}[3]{N} Docker      — fully containerized, local.\n")
-    mode = ask("Choice", default="1")
+    print(f"  {B}[1]{N} Local       — recommended. Everything runs on this machine (most private).")
+    print(f"  {B}[2]{N} Docker      — fully containerized, local.")
+    print(f"  {B}[3]{N} VPS (adv.)  — proxy + Ollama run remotely, SSH tunnel to localhost.\n")
+    display_mode = ask("Choice", default="1")
+
+    # Map the displayed choice to the internal numbering used by the branches
+    # below (legacy: 1=vps, 2=local, 3=docker), so reordering the menu is safe.
+    mode = {"1": "2", "2": "3", "3": "1"}.get(display_mode, "2")
 
     mode_name = {"1": "vps", "2": "local", "3": "docker"}.get(mode, "local")
     cfg: dict = {"engagement_id": initial_engagement, "deploy_mode": mode_name}
@@ -1123,11 +1129,11 @@ def wizard(initial_engagement: str = "") -> None:
                 warn("No SSH key — will use password authentication (requires paramiko).")
                 cfg["ssh_pass"] = ask("VPS root password", secret=True)
 
-    # ── 3. Pentest working directory ──────────────────────────────────────────
+    # ── 3. Working directory ──────────────────────────────────────────────────
     if mode == "1":
-        default_dir = str(Path.home() / "pentests" / cfg["engagement_id"])
+        default_dir = str(Path.home() / "projects" / cfg["engagement_id"])
         print()
-        info("Claude will launch from this directory (keeps your pentest files isolated).")
+        info("Claude will launch from this directory (keeps your project files isolated).")
         cfg["pentest_dir"] = ask("Working directory", default=default_dir)
 
     # ── 4. Ollama model ───────────────────────────────────────────────────────
