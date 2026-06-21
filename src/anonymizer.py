@@ -95,6 +95,23 @@ _NEVER_ANONYMIZE: frozenset[str] = frozenset({
     "github.com", "gitlab.com", "anthropic.com", "nmap.org",
     # User's own monitoring infrastructure — not a pentest target
     "grafana.internal",
+    # AI assistants, models and companies — all look like "First Last" to the LLM
+    # (Title-case two-word strings) but are product/company names, not people.
+    "claude", "claude code", "claude sonnet", "claude haiku", "claude opus",
+    "claude instant", "claude pro", "claude max",
+    "anthropic",
+    "openai", "chatgpt", "gpt", "gpt-4", "gpt-3",
+    "gemini", "google deepmind", "deepmind",
+    "copilot", "github copilot",
+    "cursor", "windsurf",
+    "mistral", "mixtral",
+    "llama", "meta ai",
+    "ollama",
+    "groq", "cerebras", "sambanova",
+    "hugging face",
+    "perplexity",
+    "claude code", "vs code", "visual studio", "visual studio code",
+    "jetbrains", "intellij",
     # AWS IAM ID prefixes — only the 4-char prefix alone, not full IDs
     # (full IDs like AKIA... are caught by regex with length requirements)
     "akia", "asia", "aida", "aroa", "agpa", "aipa", "anpa", "anva", "apka",
